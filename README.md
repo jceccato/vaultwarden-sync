@@ -90,7 +90,7 @@ You pick **one** of Mode A / B / C — all three share the same image and script
 
 ## Step 0 — Install the standby Vaultwarden *(do this if you don't have one)*
 
-Fastest path — **Community Applications**:
+**Option A — Community Applications (easiest):**
 
 1. **Apps** tab → search **`vaultwarden`** → pick the one with repository
    `vaultwarden/server` → **Install**.
@@ -103,23 +103,43 @@ Fastest path — **Community Applications**:
    get the Vaultwarden login page. Don't create an account — the first sync will
    replace `/data` with your production vault.
 
-(Alternatively use `unraid/my-vaultwarden.xml` — same result, and the data path is
-pre-filled to match the sync helper.)
+**Option B — XML template (paths pre-filled for the sync helper):**
+
+1. Download the template from GitHub:
+
+   ```bash
+   mkdir -p /boot/config/plugins/dockerMan/templates-user
+   curl -fsSL -o /boot/config/plugins/dockerMan/templates-user/my-vaultwarden.xml \
+     https://raw.githubusercontent.com/jceccato/vaultwarden-sync/master/unraid/my-vaultwarden.xml
+   ```
+
+2. **Docker tab → Add Container →** open the **Template** dropdown, pick
+   **`vaultwarden`** (under *User templates*). The data path is already
+   `/mnt/user/appdata/vaultwarden` and `SIGNUPS_ALLOWED` is `false`. Set your
+   WebUI port then **Apply**.
 
 > The data path you choose here **must** equal `APPDATA_DIR` in the sync helper.
 > Keep it at `/mnt/user/appdata/vaultwarden` and everything lines up.
 
 ---
 
-## Step 1 — Put the code on Unraid
+## Step 1 — Create the working directories
 
-Copy this folder to your server, e.g. `/mnt/user/appdata/vaultwarden-sync/src`,
-and create the working folders:
+The sync helper needs these folders on Unraid (create them once):
 
 ```bash
 mkdir -p /mnt/user/appdata/vaultwarden-sync/downloads
 mkdir -p /mnt/user/appdata/vaultwarden-rollback
 ```
+
+> **Do you need the source code on Unraid?** Not for deployment. The Docker image
+> is pulled from `ghcr.io` -- no local build required. You only need the source
+> if you plan to build the image yourself or edit the scripts:
+> ```bash
+> git clone https://github.com/jceccato/vaultwarden-sync.git /mnt/user/appdata/vaultwarden-sync/src
+> ```
+> Each mode below tells you exactly which files to download (XML templates, user
+> script, or compose file) -- you don't need the full repo unless you're developing.
 
 ## Step 2 — Get the image
 
@@ -174,11 +194,18 @@ docker run --rm -v /mnt/user/appdata/vaultwarden-sync/rclone.conf:/c.conf:ro \
 ## Step 4a — Mode A: persistent self-scheduling helper *(recommended)*
 
 ```bash
+# Clone the repo (for docker-compose.yml + .env.example)
+git clone https://github.com/jceccato/vaultwarden-sync.git /mnt/user/appdata/vaultwarden-sync/src
 cd /mnt/user/appdata/vaultwarden-sync/src
 cp .env.example .env
 nano .env            # set paths, container name, RCLONE_PATH, BACKUP_ENCRYPTION_KEY...
-docker compose up -d --build
+docker compose up -d
 ```
+
+> The `docker-compose.yml` still has `build: .` for development. If you want to
+> use the prebuilt image instead, comment out `build: .` and set `image:
+> ghcr.io/jceccato/vaultwarden-sync:latest` in the compose file, or just keep
+> `build: .` -- both work.
 
 The helper now wakes on `SCHEDULE` (default `0 3 * * *`) and syncs. Watch it:
 
@@ -198,7 +225,14 @@ If you'd rather schedule with the **User Scripts** plugin and not keep a helper
 container running:
 
 1. Pull the image (Step 2), or Docker will auto-pull it on first run.
-2. Plugins → User Scripts → **Add New Script**, paste `unraid-user-script.sh`,
+2. **Download the user script** from GitHub:
+
+   ```bash
+   curl -fsSL -o /tmp/vaultwarden-sync-user-script.sh \
+     https://raw.githubusercontent.com/jceccato/vaultwarden-sync/master/unraid-user-script.sh
+   ```
+
+3. Plugins → User Scripts → **Add New Script**, paste the contents of that file,
    edit the paths/values at the top.
 3. Set its schedule (Custom cron, e.g. `0 3 * * *`).
 
@@ -209,9 +243,12 @@ Each run spins up a throwaway container, does one sync, and exits.
 Native Unraid management (Edit / Start / Stop / Logs from the Docker tab), no
 compose plugin needed. The image pulls from GitHub Container Registry automatically.
 
-1. **Install the template** — copy `unraid/my-vaultwarden-sync.xml` to:
-   ```
-   /boot/config/plugins/dockerMan/templates-user/my-vaultwarden-sync.xml
+1. **Install the template** -- download it from GitHub:
+
+   ```bash
+   mkdir -p /boot/config/plugins/dockerMan/templates-user
+   curl -fsSL -o /boot/config/plugins/dockerMan/templates-user/my-vaultwarden-sync.xml \
+     https://raw.githubusercontent.com/jceccato/vaultwarden-sync/master/unraid/my-vaultwarden-sync.xml
    ```
 2. **Docker tab → Add Container →** open the **Template** dropdown at the top and
    pick **`vaultwarden-sync`** (under *User templates*). The fields populate from
