@@ -3,20 +3,18 @@
   Unraid template for the vaultwarden-sync helper.
 
   Install:
-    1. Build the image ON UNRAID with a LOCAL tag (see Repository below):
-         docker build -t vaultwarden-sync:local /mnt/user/appdata/vaultwarden-sync/src
-    2. Copy this file to:
+    1. Copy this file to:
          /boot/config/plugins/dockerMan/templates-user/my-vaultwarden-sync.xml
-    3. Docker tab -> Add Container -> Template dropdown -> "vaultwarden-sync".
-       Fill in the fields and hit Apply.
+    2. Docker tab -> Add Container -> Template dropdown -> "vaultwarden-sync".
+       Fill in the fields and hit Apply. The image pulls from ghcr.io.
 
-  Note: on Apply, Unraid tries to pull "vaultwarden-sync:local". That pull will
-  report a failure (the image isn't on any registry) but the container is still
-  created from your locally-built image. This is expected.
+  To use a locally-built image instead, change Repository to
+  "vaultwarden-sync:local" and build it first with:
+    docker build -t vaultwarden-sync:local /mnt/user/appdata/vaultwarden-sync/src
 -->
 <Container version="2">
   <Name>vaultwarden-sync</Name>
-  <Repository>vaultwarden-sync:local</Repository>
+  <Repository>ghcr.io/jceccato/vaultwarden-sync:latest</Repository>
   <Registry/>
   <Network>bridge</Network>
   <MyIP/>

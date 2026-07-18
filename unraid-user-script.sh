@@ -6,11 +6,8 @@
 # schedule (e.g. custom: 0 3 * * *). It runs the sync ONCE in a throwaway
 # container, then exits. No persistent helper container required.
 #
-# Build the image first (one time), on the Unraid terminal:
-#   cd /boot/config/plugins/user.scripts/scripts/vaultwarden-sync   # or wherever you put it
-#   docker build -t vaultwarden-sync /mnt/user/appdata/vaultwarden-sync/src
-#
-# Then edit the paths/values below to match your setup.
+# The image is published to GitHub Container Registry. On first run Docker will
+# pull it automatically. Edit the paths/values below to match your setup.
 
 set -euo pipefail
 
@@ -42,4 +39,4 @@ docker run --rm \
   -v "$ROLLBACK_DIR":/data/rollback \
   -v "$DOWNLOAD_DIR":/data/downloads \
   -v "$RCLONE_CONF":/config/rclone.conf:ro \
-  vaultwarden-sync:latest sync
+  ghcr.io/jceccato/vaultwarden-sync:latest sync

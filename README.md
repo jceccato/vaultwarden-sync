@@ -66,9 +66,14 @@ settings come from its template, not a `.env`.
 | `unraid/my-vaultwarden.xml` | Optional GUI template for the standby Vaultwarden itself |
 | `.env.example` | Config template (copy to `.env`) |
 | `config/rclone.conf.example` | What the rclone remote should look like |
+| Prebuilt image | `ghcr.io/jceccato/vaultwarden-sync` — Docker image built by [GitHub Actions](https://github.com/jceccato/vaultwarden-sync/actions/workflows/publish.yml) |
 
 You pick **one** of Mode A / B / C — all three share the same image and script.
 **Mode C is the one to use if you want to manage the helper from the Unraid GUI.**
+
+> Docker images are published automatically on every push to `master` (tagged
+> `latest`) and on every `v*` tag (semver-tagged). You can pull the prebuilt
+> image instead of building locally. See [Step 2](#step-2--get-the-image).
 
 ---
 
@@ -116,11 +121,23 @@ mkdir -p /mnt/user/appdata/vaultwarden-sync/downloads
 mkdir -p /mnt/user/appdata/vaultwarden-rollback
 ```
 
-## Step 2 — Build the image
+## Step 2 — Get the image
+
+The image is published to GitHub Container Registry. Pull it directly:
+
+```bash
+docker pull ghcr.io/jceccato/vaultwarden-sync:latest
+```
+
+**Or build it yourself** (for development or if you prefer):
 
 ```bash
 docker build -t vaultwarden-sync /mnt/user/appdata/vaultwarden-sync/src
 ```
+
+> Modes B and C below reference the prebuilt `ghcr.io/...` image. If you built
+> locally, replace it with `vaultwarden-sync:latest` (or `vaultwarden-sync:local`
+> for Mode C).
 
 ## Step 3 — Create the rclone remote (read-only)
 
@@ -180,7 +197,7 @@ docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh sync
 If you'd rather schedule with the **User Scripts** plugin and not keep a helper
 container running:
 
-1. Build the image (Step 2).
+1. Pull the image (Step 2), or Docker will auto-pull it on first run.
 2. Plugins → User Scripts → **Add New Script**, paste `unraid-user-script.sh`,
    edit the paths/values at the top.
 3. Set its schedule (Custom cron, e.g. `0 3 * * *`).
@@ -190,30 +207,25 @@ Each run spins up a throwaway container, does one sync, and exits.
 ## Step 4c — Mode C: Unraid GUI (XML template) *(manage it from the webUI)*
 
 Native Unraid management (Edit / Start / Stop / Logs from the Docker tab), no
-compose plugin needed.
+compose plugin needed. The image pulls from GitHub Container Registry automatically.
 
-1. **Build the image on Unraid with a _local_ tag** (the tag matters — see note):
-   ```bash
-   docker build -t vaultwarden-sync:local /mnt/user/appdata/vaultwarden-sync/src
-   ```
-2. **Install the template** — copy `unraid/my-vaultwarden-sync.xml` to:
+1. **Install the template** — copy `unraid/my-vaultwarden-sync.xml` to:
    ```
    /boot/config/plugins/dockerMan/templates-user/my-vaultwarden-sync.xml
    ```
-3. **Docker tab → Add Container →** open the **Template** dropdown at the top and
+2. **Docker tab → Add Container →** open the **Template** dropdown at the top and
    pick **`vaultwarden-sync`** (under *User templates*). The fields populate from
    the XML.
-4. Fill in `BACKUP_ENCRYPTION_KEY`, check the paths/`CONTAINER_NAME`/`RCLONE_PATH`,
-   then **Apply**.
+3. Fill in `BACKUP_ENCRYPTION_KEY`, check the paths/`CONTAINER_NAME`/`RCLONE_PATH`,
+   then **Apply**. Unraid pulls the image from `ghcr.io` automatically.
 
-> ℹ️ On Apply, Unraid will try to *pull* `vaultwarden-sync:local` and report the
-> pull **failed** — that's expected and harmless, because the image already
-> exists locally. The container is still created and runs. Using a `:local` tag
-> (not `:latest`) avoids Unraid ever overwriting your build with a registry image.
-> ([why](https://forums.unraid.net/topic/103025-how-do-you-add-a-local-docker-image-to-unraid-gui/))
+> For a **locally-built image**, change the Repository in the template to
+> `vaultwarden-sync:local`, build it with `docker build -t vaultwarden-sync:local ...`,
+> and Apply. Unraid will report a harmless pull failure and use your local image.
 
-To rebuild later (after editing the script): re-run the `docker build` above,
-then in the Docker tab stop the container and Start it again (or Edit → Apply).
+To update the image later (after a new version is published): stop the container
+in the Docker tab, then Edit → Apply. Unraid pulls the latest image from
+`ghcr.io` on Apply.
 
 ---
 

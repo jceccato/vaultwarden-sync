@@ -83,11 +83,12 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
   *inside the vault*. Restore needs it, so an offline copy is mandatory. The key
   is a masked/secret field — never commit it; `.env` + `rclone.conf` are
   git-ignored.
-- **Local image tag `:local`, not `:latest`:** the helper image is built locally
-  (no registry). Unraid's *Apply* tries to pull and reports a harmless failure;
-  it still runs from the local image. `:local` avoids Unraid ever overwriting the
-  build with a registry `:latest`. Build:
-  `docker build -t vaultwarden-sync:local /mnt/user/appdata/vaultwarden-sync/src`.
+- **Image published at `ghcr.io/jceccato/vaultwarden-sync`:** the Docker image is
+  built and pushed by the `publish.yml` workflow on push to `master` (`:latest`)
+  and on `v*` tags (semver tags). The Unraid XML template uses the registry image
+  by default. For local development, build with a `:local` tag to avoid Unraid
+  overwriting your build:
+  `docker build -t vaultwarden-sync:local .`
 - **WAL removal on restore:** must delete `db.sqlite3-wal` / `-shm` before
   dropping in the new db, or a stale WAL corrupts the restored DB (vaultwarden
   uses WAL mode).
