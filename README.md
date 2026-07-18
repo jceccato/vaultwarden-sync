@@ -1,4 +1,4 @@
-# Vaultwarden one-way restore for Unraid
+﻿# Vaultwarden one-way restore for Unraid
 
 Keep a **warm standby** copy of your Google-Cloud Vaultwarden on Unraid, kept in
 sync from the nightly Google Drive backups produced by
@@ -42,7 +42,7 @@ tar: `db.sqlite3` (at the archive root), plus `data/attachments/`,
 `data/sends/`, `data/config.json`, `data/rsa_key*`, and optionally `.env`.
 
 This tool decrypts/extracts with the same `openssl`/`tar` settings and restores
-exactly those files. The GCloud `.env` is **ignored** — on Unraid your container
+exactly those files. The GCloud `.env` is **ignored** - on Unraid your container
 settings come from its template, not a `.env`.
 
 > 🔑 **Encryption-key warning.** You said the backup key lives *inside* Vaultwarden.
@@ -60,15 +60,15 @@ settings come from its template, not a `.env`.
 | `scripts/vaultwarden-sync.sh` | The actual sync / restore / rollback / status logic |
 | `entrypoint.sh` | Container entrypoint: cron loop *or* one-shot |
 | `Dockerfile` | Helper image (rclone + openssl + sqlite + rsync + docker-cli) |
-| `docker-compose.yml` | **Mode A** — persistent, self-scheduling helper (compose) |
-| `unraid-user-script.sh` | **Mode B** — ephemeral run driven by the User Scripts plugin |
-| `unraid/my-vaultwarden-sync.xml` | **Mode C** — Unraid GUI template for the helper |
+| `docker-compose.yml` | **Mode A** - persistent, self-scheduling helper (compose) |
+| `unraid-user-script.sh` | **Mode B** - ephemeral run driven by the User Scripts plugin |
+| `unraid/my-vaultwarden-sync.xml` | **Mode C** - Unraid GUI template for the helper |
 | `unraid/my-vaultwarden.xml` | Optional GUI template for the standby Vaultwarden itself |
 | `.env.example` | Config template (copy to `.env`) |
 | `config/rclone.conf.example` | What the rclone remote should look like |
-| Prebuilt image | `ghcr.io/jceccato/vaultwarden-sync` — Docker image built by [GitHub Actions](https://github.com/jceccato/vaultwarden-sync/actions/workflows/publish.yml) |
+| Prebuilt image | `ghcr.io/jceccato/vaultwarden-sync` - Docker image built by [GitHub Actions](https://github.com/jceccato/vaultwarden-sync/actions/workflows/publish.yml) |
 
-You pick **one** of Mode A / B / C — all three share the same image and script.
+You pick **one** of Mode A / B / C - all three share the same image and script.
 **Mode C is the one to use if you want to manage the helper from the Unraid GUI.**
 
 > Docker images are published automatically on every push to `master` (tagged
@@ -82,15 +82,15 @@ You pick **one** of Mode A / B / C — all three share the same image and script
 - The GCloud stack is backing up to Drive (`BACKUP=rclone`) and you know its
   `BACKUP_RCLONE_DEST` (the Drive folder name) and `BACKUP_ENCRYPTION_KEY`.
 - Docker (built into Unraid). Everything else (rclone, openssl, sqlite, rsync)
-  ships inside the helper image — nothing to install on the host.
+  ships inside the helper image - nothing to install on the host.
 - A **standby Vaultwarden container** on Unraid with data at
   `/mnt/user/appdata/vaultwarden`. If you don't have one, do **Step 0**.
 
 ---
 
-## Step 0 — Install the standby Vaultwarden *(do this if you don't have one)*
+## Step 0 - Install the standby Vaultwarden *(do this if you don't have one)*
 
-**Option A — Community Applications (easiest):**
+**Option A - Community Applications (easiest):**
 
 1. **Apps** tab → search **`vaultwarden`** → pick the one with repository
    `vaultwarden/server` → **Install**.
@@ -100,10 +100,10 @@ You pick **one** of Mode A / B / C — all three share the same image and script
    - **`SIGNUPS_ALLOWED`** → `false` (accounts come from the restore)
    - Note the **container name** (default `vaultwarden`)
 3. **Apply**, wait for it to start, open `http://<TOWER-IP>:8484` and confirm you
-   get the Vaultwarden login page. Don't create an account — the first sync will
+   get the Vaultwarden login page. Don't create an account - the first sync will
    replace `/data` with your production vault.
 
-**Option B — XML template (paths pre-filled for the sync helper):**
+**Option B - XML template (paths pre-filled for the sync helper):**
 
 1. Download the template from GitHub:
 
@@ -123,7 +123,7 @@ You pick **one** of Mode A / B / C — all three share the same image and script
 
 ---
 
-## Step 1 — Create the working directories
+## Step 1 - Create the working directories
 
 The sync helper needs these folders on Unraid (create them once):
 
@@ -141,7 +141,7 @@ mkdir -p /mnt/user/appdata/vaultwarden-rollback
 > Each mode below tells you exactly which files to download (XML templates, user
 > script, or compose file) -- you don't need the full repo unless you're developing.
 
-## Step 2 — Get the image
+## Step 2 - Get the image
 
 The image is published to GitHub Container Registry. Pull it directly:
 
@@ -159,7 +159,7 @@ docker build -t vaultwarden-sync /mnt/user/appdata/vaultwarden-sync/src
 > locally, replace it with `vaultwarden-sync:latest` (or `vaultwarden-sync:local`
 > for Mode C).
 
-## Step 3 — Create the rclone remote (read-only)
+## Step 3 - Create the rclone remote (read-only)
 
 You need an `rclone.conf` on Unraid with a remote pointing at the **same Drive**
 your backups go to. Easiest is to authorise on your desktop and copy the result
@@ -191,7 +191,7 @@ docker run --rm -v /mnt/user/appdata/vaultwarden-sync/rclone.conf:/c.conf:ro \
 
 ---
 
-## Step 4a — Mode A: persistent self-scheduling helper *(recommended)*
+## Step 4a - Mode A: persistent self-scheduling helper *(recommended)*
 
 ```bash
 # Clone the repo (for docker-compose.yml + .env.example)
@@ -219,7 +219,7 @@ Run an immediate sync any time:
 docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh sync
 ```
 
-## Step 4b — Mode B: Unraid User Scripts *(alternative)*
+## Step 4b - Mode B: Unraid User Scripts *(alternative)*
 
 If you'd rather schedule with the **User Scripts** plugin and not keep a helper
 container running:
@@ -238,7 +238,7 @@ container running:
 
 Each run spins up a throwaway container, does one sync, and exits.
 
-## Step 4c — Mode C: Unraid GUI (XML template) *(manage it from the webUI)*
+## Step 4c - Mode C: Unraid GUI (XML template) *(manage it from the webUI)*
 
 Native Unraid management (Edit / Start / Stop / Logs from the Docker tab), no
 compose plugin needed. The image pulls from GitHub Container Registry automatically.
@@ -278,7 +278,7 @@ docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh sync --force
 
 Then open the local Vaultwarden web UI and log in with your real credentials to
 confirm the vault decrypts. **If login works on the standby, your DR copy is
-real.** (If it doesn't, the encryption key or rsa_keys didn't come across —
+real.** (If it doesn't, the encryption key or rsa_keys didn't come across -
 check the log.)
 
 ---
@@ -322,13 +322,13 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 
 ### About `UPDATE_METHOD`
 
-- **`watchtower`** *(recommended)* — runs `containrrr/watchtower --run-once` against
+- **`watchtower`** *(recommended)* - runs `containrrr/watchtower --run-once` against
   just your container: pulls the latest image and, if newer, recreates the
   container **preserving its Unraid template settings**, then starts it. A plain
   `docker pull` can't recreate it, so the container would otherwise keep running
   the old image.
-- **`pull`** — only pulls the image (you recreate later in the Unraid UI).
-- **`none`** — leave updates to your existing watchtower / CA Auto Update.
+- **`pull`** - only pulls the image (you recreate later in the Unraid UI).
+- **`none`** - leave updates to your existing watchtower / CA Auto Update.
 
 ---
 
@@ -336,12 +336,12 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 
 - **Live data is only touched after** the backup downloads, decrypts, extracts,
   and passes a `PRAGMA integrity_check`. A bad/partial download aborts before the
-  container is stopped — your standby stays up on its previous data.
+  container is stopped - your standby stays up on its previous data.
 - The DB's `-wal`/`-shm` sidecars are removed during restore so a stale WAL can't
   corrupt the freshly restored database.
 - `ROLLBACK_DIR` and `DOWNLOAD_DIR` **must be outside** `APPDATA_DIR`.
 - The helper mounts `/var/run/docker.sock` (to stop/start/update Vaultwarden) and
-  reads your encryption key — treat this container as sensitive.
+  reads your encryption key - treat this container as sensitive.
 - This tool only **reads** from Drive. Even so, prefer a `drive.readonly` rclone
   scope so it physically cannot modify your GCloud backups.
 
@@ -351,11 +351,11 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 |---------|--------------|
 | `Backup is encrypted (.aes256) but BACKUP_ENCRYPTION_KEY is empty` | Set the key in `.env` / script |
 | `Failed to decrypt/extract` | Wrong `BACKUP_ENCRYPTION_KEY` |
-| `No backups found at gdrive:...` | Wrong `RCLONE_PATH`, or remote auth/scope issue — test with `rclone lsf` |
+| `No backups found at gdrive:...` | Wrong `RCLONE_PATH`, or remote auth/scope issue - test with `rclone lsf` |
 | `SQLite integrity_check failed` | The downloaded backup is corrupt; it refuses to apply it |
 | Standby won't decrypt the vault after restore | `rsa_key*` missing from backup, or you logged in against the wrong server |
 | Update step warns but continues | watchtower couldn't reach a registry; container still starts on current image |
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for the full text.
+MIT - see [LICENSE](LICENSE) for the full text.

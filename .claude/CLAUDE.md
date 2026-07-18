@@ -1,4 +1,4 @@
-# Project: vaultwarden-sync
+﻿# Project: vaultwarden-sync
 
 One-way restore of a Google-Cloud Vaultwarden backup into a **standby Vaultwarden
 container on Unraid**. Runs on a schedule: pull the newest backup from Google
@@ -16,7 +16,7 @@ It is **not currently a git repo**.
 - They keep a **warm standby** copy on Unraid, restored from those backups "just
   in case". This project automates keeping that standby in sync.
 - Strictly one-way (Drive → Unraid). The rclone remote should be read-only.
-- **Not HA** — the standby lags by up to one backup cycle; GCloud is primary.
+- **Not HA** - the standby lags by up to one backup cycle; GCloud is primary.
 
 ## How the upstream GCloud backup works (drives the whole restore design)
 
@@ -33,7 +33,7 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 - **Tar contents:** `db.sqlite3` at the archive **ROOT** (added via `-C /tmp`),
   plus under `data/`: `attachments/`, `sends/`, `config.json`, `rsa_key*`, and
   optionally `.env`. The restore logic mirrors upstream `restore_backup()`.
-- The GCloud `.env` is **deliberately ignored** on restore — a single Unraid
+- The GCloud `.env` is **deliberately ignored** on restore - a single Unraid
   container gets its env from its template, not a `.env` file.
 
 ## Repo layout
@@ -43,9 +43,9 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 | `scripts/vaultwarden-sync.sh` | Core logic. Subcommands: `sync` (default), `sync --force`, `restore <file>`, `rollback`, `status` |
 | `entrypoint.sh` | Container entrypoint: no args → busybox `crond` loop; a subcommand → run once and exit |
 | `Dockerfile` | alpine:3.20 + bash, rclone, openssl, sqlite, rsync, tar, docker-cli, tini |
-| `docker-compose.yml` | **Mode A** — persistent self-scheduling helper (compose) |
-| `unraid-user-script.sh` | **Mode B** — ephemeral `docker run ... sync` via User Scripts plugin |
-| `unraid/my-vaultwarden-sync.xml` | **Mode C** — Unraid GUI template for the helper |
+| `docker-compose.yml` | **Mode A** - persistent self-scheduling helper (compose) |
+| `unraid-user-script.sh` | **Mode B** - ephemeral `docker run ... sync` via User Scripts plugin |
+| `unraid/my-vaultwarden-sync.xml` | **Mode C** - Unraid GUI template for the helper |
 | `unraid/my-vaultwarden.xml` | Optional GUI template for the standby Vaultwarden |
 | `.env.example` | Config template for Mode A |
 | `config/rclone.conf.example` | Shape of the rclone remote (real one is git-ignored) |
@@ -58,7 +58,7 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 2. Download it to `WORK_DIR`.
 3. **`stage_and_validate`** (nothing live touched yet): decrypt (if `.aes256`) +
    extract to a temp dir, require `db.sqlite3`, run `PRAGMA integrity_check`.
-   Any failure aborts here — the standby keeps running on old data.
+   Any failure aborts here - the standby keeps running on old data.
 4. `stop_container` (docker stop).
 5. `rotate_rollback`: `rsync -a --delete APPDATA → ROLLBACK` (clear + copy).
    Skipped on first run when appdata has no `db.sqlite3`.
@@ -69,11 +69,11 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 
 ## Deployment modes (pick ONE; all share the same image + script)
 
-- **A — compose:** `docker compose up -d --build`; container self-schedules via
+- **A - compose:** `docker compose up -d --build`; container self-schedules via
   built-in cron (`SCHEDULE`).
-- **B — User Scripts:** build image once, User Scripts entry runs an ephemeral
+- **B - User Scripts:** build image once, User Scripts entry runs an ephemeral
   `docker run ... vaultwarden-sync:local sync` on a cron schedule.
-- **C — Unraid GUI (chosen by user):** build image, drop XML in
+- **C - Unraid GUI (chosen by user):** build image, drop XML in
   `/boot/config/plugins/dockerMan/templates-user/`, Add Container from the
   template. Fully GUI-managed (Edit/Start/Stop/Logs).
 
@@ -81,7 +81,7 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 
 - **Encryption-key chicken-and-egg:** the user stores `BACKUP_ENCRYPTION_KEY`
   *inside the vault*. Restore needs it, so an offline copy is mandatory. The key
-  is a masked/secret field — never commit it; `.env` + `rclone.conf` are
+  is a masked/secret field - never commit it; `.env` + `rclone.conf` are
   git-ignored.
 - **Image published at `ghcr.io/jceccato/vaultwarden-sync`:** the Docker image is
   built and pushed by the `publish.yml` workflow on push to `master` (`:latest`)
@@ -118,7 +118,7 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 
 Deploying via **Mode C**, guided by SSH commands. Runbook order:
 0. Install standby Vaultwarden (Apps tab, `/data`=`/mnt/user/appdata/vaultwarden`,
-   port 8484, `SIGNUPS_ALLOWED=false`) — user reported the old container was gone.
+   port 8484, `SIGNUPS_ALLOWED=false`) - user reported the old container was gone.
 1. `scp -r` this dir to `/mnt/user/appdata/vaultwarden-sync/src`; make
    `downloads/` and `vaultwarden-rollback/` dirs.
 2. `docker build -t vaultwarden-sync:local .../src`.
@@ -130,8 +130,8 @@ Deploying via **Mode C**, guided by SSH commands. Runbook order:
 
 ## Verify / recover
 
-- `... vaultwarden-sync.sh status` — read-only: newest remote vs last restored.
-- `... vaultwarden-sync.sh sync --force` — restore newest even if already done.
-- `... vaultwarden-sync.sh rollback` — restore appdata from the rollback snapshot.
+- `... vaultwarden-sync.sh status` - read-only: newest remote vs last restored.
+- `... vaultwarden-sync.sh sync --force` - restore newest even if already done.
+- `... vaultwarden-sync.sh rollback` - restore appdata from the rollback snapshot.
 - Proof of a good DR copy: log into the standby web UI with real credentials and
   confirm the vault decrypts (validates `rsa_key*` + db came across).

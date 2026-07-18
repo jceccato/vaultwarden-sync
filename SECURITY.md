@@ -48,7 +48,7 @@ When you report a vulnerability, you can expect:
 - Physical access to the Unraid server
 - Social engineering attacks
 - Vulnerabilities in upstream dependencies (rclone, openssl, sqlite3, Docker
-  itself) — please report those to their respective projects
+  itself) - please report those to their respective projects
 - Misconfiguration by the user (weak encryption key, world-readable config files,
   exposed Docker socket)
 
@@ -69,7 +69,7 @@ security considerations:
 
 - **Read-only rclone remote:** The tool only reads from Google Drive. The rclone
   remote should be configured with `scope = drive.readonly`. This is a defense-in-depth
-  measure — even if the tool were compromised, it could not modify your backups.
+  measure - even if the tool were compromised, it could not modify your backups.
 
 - **Staging before live data:** Backups are downloaded, decrypted, extracted,
   and validated in a temporary staging directory before the live Vaultwarden

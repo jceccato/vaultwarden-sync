@@ -47,7 +47,7 @@ shellcheck scripts/vaultwarden-sync.sh entrypoint.sh
 ```
 
 Existing `shellcheck` directives (e.g., `# shellcheck disable=SC2064`) are
-intentional — read the comment before removing them.
+intentional - read the comment before removing them.
 
 ### Testing
 
@@ -76,7 +76,7 @@ Before submitting a PR, at minimum verify:
 - **Functions use `snake_case`** (e.g., `stop_container`, `latest_remote`).
 - **Variables use `UPPER_CASE`** for config/env and `lower_case` for locals.
 - **Always quote variable expansions** unless you have an explicit reason not to.
-- **Comments explain *why*, not *what*** — the code should be readable on its own.
+- **Comments explain *why*, not *what*** - the code should be readable on its own.
 - **Log levels:** `log()` for normal info, `warn()` for recoverable issues,
   `err()` / `die()` for fatal errors. Messages go to stderr so they show up in
   `docker logs`.
