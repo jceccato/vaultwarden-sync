@@ -1,0 +1,15 @@
+# Example rclone remote for reading your Google Drive backups.
+#
+# Generate the real file with `rclone config` (see the README) rather than
+# editing this by hand -- it needs a valid OAuth token.  Recommended scope is
+# drive.readonly since this tool only ever READS from Drive.
+#
+# The remote name (here: gdrive) must match RCLONE_REMOTE.
+
+[gdrive]
+type = drive
+scope = drive.readonly
+token = {"access_token":"REPLACE_ME","token_type":"Bearer","refresh_token":"REPLACE_ME","expiry":"2026-01-01T00:00:00Z"}
+
+# If your backups live in a shared drive or "shared with me" folder you may also
+# need:  RCLONE_EXTRA_FLAGS=--drive-shared-with-me   (set in .env)

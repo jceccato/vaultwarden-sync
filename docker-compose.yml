@@ -1,0 +1,36 @@
+# Persistent helper container that schedules itself (Mode A).
+# Copy .env.example -> .env, fill it in, then:  docker compose up -d --build
+#
+# For an ephemeral / User-Scripts-driven run instead, see the README (Mode B).
+services:
+  vaultwarden-sync:
+    build: .
+    image: vaultwarden-sync:latest
+    container_name: vaultwarden-sync
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      SCHEDULE: ${SCHEDULE:-0 3 * * *}        # cron: when to check Drive (host TZ)
+      RUN_ON_START: ${RUN_ON_START:-false}    # also run once when the container starts
+
+      CONTAINER_NAME: ${CONTAINER_NAME:-vaultwarden}
+
+      RCLONE_REMOTE: ${RCLONE_REMOTE:-gdrive}
+      RCLONE_PATH: ${RCLONE_PATH:-bw_backups} # == BACKUP_RCLONE_DEST on GCloud
+      RCLONE_EXTRA_FLAGS: ${RCLONE_EXTRA_FLAGS:-}
+
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}  # openssl passphrase (SECRET)
+
+      UPDATE_METHOD: ${UPDATE_METHOD:-watchtower}        # watchtower | pull | none
+      VAULTWARDEN_IMAGE: ${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}
+    volumes:
+      # control the vaultwarden container + run watchtower
+      - /var/run/docker.sock:/var/run/docker.sock
+      # live vaultwarden appdata (its /data)
+      - ${APPDATA_DIR:?set APPDATA_DIR in .env}:/data/live
+      # rollback snapshot (separate folder, NOT inside appdata)
+      - ${ROLLBACK_DIR:?set ROLLBACK_DIR in .env}:/data/rollback
+      # downloaded backups + the .last_restored state file
+      - ${DOWNLOAD_DIR:?set DOWNLOAD_DIR in .env}:/data/downloads
+      # your rclone config holding the gdrive remote (read-only)
+      - ${RCLONE_CONF:?set RCLONE_CONF in .env}:/config/rclone.conf:ro

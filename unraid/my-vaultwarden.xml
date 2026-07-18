@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<!--
+  Minimal Unraid template for a standby Vaultwarden.
+
+  EASIEST path instead of this file: Unraid "Apps" tab -> search "vaultwarden"
+  -> install the community template -> just set the data path to
+  /mnt/user/appdata/vaultwarden and a WebUI port.
+
+  If you use THIS template: copy to
+    /boot/config/plugins/dockerMan/templates-user/my-vaultwarden.xml
+  then Docker tab -> Add Container -> Template dropdown -> "vaultwarden".
+
+  The data path (/data -> /mnt/user/appdata/vaultwarden) MUST match the
+  "Vaultwarden appdata (live)" path in the vaultwarden-sync template.
+  Repository IS on Docker Hub, so this one pulls normally (no local-tag trick).
+-->
+<Container version="2">
+  <Name>vaultwarden</Name>
+  <Repository>vaultwarden/server:latest</Repository>
+  <Registry>https://hub.docker.com/r/vaultwarden/server</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/dani-garcia/vaultwarden</Project>
+  <Overview>Standby Vaultwarden. Its /data is kept in sync from your Google Cloud backups by the vaultwarden-sync container. Sign-ups are disabled by default since users are restored from the production backup.</Overview>
+  <Category>Security: Other:</Category>
+  <WebUI>http://[IP]:[PORT:80]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/resources/vaultwarden-icon-white.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="WebUI Port" Target="80" Default="8484" Mode="tcp" Description="Host port for the Vaultwarden web UI." Type="Port" Display="always" Required="true" Mask="false">8484</Config>
+
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/vaultwarden" Mode="rw" Description="Vaultwarden data. MUST match the vaultwarden-sync 'live' path." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/vaultwarden</Config>
+
+  <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="" Description="Timezone." Type="Variable" Display="always" Required="true" Mask="false">Etc/UTC</Config>
+
+  <Config Name="SIGNUPS_ALLOWED" Target="SIGNUPS_ALLOWED" Default="false" Mode="" Description="Keep false: this is a restored copy; accounts come from the backup." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
+
+  <Config Name="ADMIN_TOKEN" Target="ADMIN_TOKEN" Default="" Mode="" Description="Optional. Token for the /admin page. Leave blank to disable the admin page." Type="Variable" Display="advanced" Required="false" Mask="true"/>
+
+  <Config Name="DOMAIN" Target="DOMAIN" Default="" Mode="" Description="Optional, e.g. http://TOWER-IP:8484 . Needed for WebAuthn/attachments URLs; fine to leave blank for a standby." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!--
+  Unraid template for the vaultwarden-sync helper.
+
+  Install:
+    1. Build the image ON UNRAID with a LOCAL tag (see Repository below):
+         docker build -t vaultwarden-sync:local /mnt/user/appdata/vaultwarden-sync/src
+    2. Copy this file to:
+         /boot/config/plugins/dockerMan/templates-user/my-vaultwarden-sync.xml
+    3. Docker tab -> Add Container -> Template dropdown -> "vaultwarden-sync".
+       Fill in the fields and hit Apply.
+
+  Note: on Apply, Unraid tries to pull "vaultwarden-sync:local". That pull will
+  report a failure (the image isn't on any registry) but the container is still
+  created from your locally-built image. This is expected.
+-->
+<Container version="2">
+  <Name>vaultwarden-sync</Name>
+  <Repository>vaultwarden-sync:local</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/dadatuputi/bitwarden_gcloud</Project>
+  <Overview>Nightly one-way restore of the Google Cloud Vaultwarden backups (from Google Drive) into a local standby Vaultwarden container. Downloads the newest bw_backup_*, decrypts/verifies it, snapshots current appdata to a rollback folder, restores, updates the image, and restarts Vaultwarden. Runs its own cron (SCHEDULE).</Overview>
+  <Category>Backup: Tools: Security:</Category>
+  <WebUI/>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/dani-garcia/vaultwarden/main/resources/vaultwarden-icon-white.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="Docker Socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="Needed to stop/start/update the Vaultwarden container." Type="Path" Display="advanced" Required="true" Mask="false">/var/run/docker.sock</Config>
+
+  <Config Name="Vaultwarden appdata (live)" Target="/data/live" Default="/mnt/user/appdata/vaultwarden" Mode="rw" Description="The live Vaultwarden /data folder. MUST match the data path of your Vaultwarden container." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/vaultwarden</Config>
+
+  <Config Name="Rollback snapshot" Target="/data/rollback" Default="/mnt/user/appdata/vaultwarden-rollback" Mode="rw" Description="Safety mirror of appdata taken before each restore. MUST be outside the appdata folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/vaultwarden-rollback</Config>
+
+  <Config Name="Downloads / state" Target="/data/downloads" Default="/mnt/user/appdata/vaultwarden-sync/downloads" Mode="rw" Description="Where backups are downloaded and the .last_restored marker is kept." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/vaultwarden-sync/downloads</Config>
+
+  <Config Name="rclone.conf" Target="/config/rclone.conf" Default="/mnt/user/appdata/vaultwarden-sync/rclone.conf" Mode="ro" Description="rclone config file containing the (read-only) Google Drive remote." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/vaultwarden-sync/rclone.conf</Config>
+
+  <Config Name="TZ" Target="TZ" Default="Etc/UTC" Mode="" Description="Timezone for the schedule and log timestamps." Type="Variable" Display="always" Required="true" Mask="false">Etc/UTC</Config>
+
+  <Config Name="SCHEDULE" Target="SCHEDULE" Default="0 3 * * *" Mode="" Description="Cron expression for when to check Drive. Run a bit after your GCloud nightly backup." Type="Variable" Display="always" Required="true" Mask="false">0 3 * * *</Config>
+
+  <Config Name="RUN_ON_START" Target="RUN_ON_START" Default="false" Mode="" Description="Also run one sync immediately whenever the container starts." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
+
+  <Config Name="CONTAINER_NAME" Target="CONTAINER_NAME" Default="vaultwarden" Mode="" Description="Name of your local Vaultwarden container to control." Type="Variable" Display="always" Required="true" Mask="false">vaultwarden</Config>
+
+  <Config Name="RCLONE_REMOTE" Target="RCLONE_REMOTE" Default="gdrive" Mode="" Description="Remote name inside rclone.conf (e.g. gdrive)." Type="Variable" Display="always" Required="true" Mask="false">gdrive</Config>
+
+  <Config Name="RCLONE_PATH" Target="RCLONE_PATH" Default="bw_backups" Mode="" Description="Drive folder holding the backups = BACKUP_RCLONE_DEST on GCloud." Type="Variable" Display="always" Required="true" Mask="false">bw_backups</Config>
+
+  <Config Name="BACKUP_ENCRYPTION_KEY" Target="BACKUP_ENCRYPTION_KEY" Default="" Mode="" Description="openssl passphrase = BACKUP_ENCRYPTION_KEY on GCloud. Leave blank only if backups are unencrypted. KEEP AN OFFLINE COPY." Type="Variable" Display="always" Required="true" Mask="true"/>
+
+  <Config Name="UPDATE_METHOD" Target="UPDATE_METHOD" Default="watchtower|pull|none" Mode="" Description="How to keep Vaultwarden up to date. watchtower = pull + recreate (recommended); pull = image only; none = leave it to your own updater." Type="Variable" Display="always" Required="true" Mask="false">watchtower</Config>
+
+  <Config Name="VAULTWARDEN_IMAGE" Target="VAULTWARDEN_IMAGE" Default="vaultwarden/server:latest" Mode="" Description="Image used only by UPDATE_METHOD=pull." Type="Variable" Display="advanced" Required="false" Mask="false">vaultwarden/server:latest</Config>
+
+  <Config Name="RCLONE_EXTRA_FLAGS" Target="RCLONE_EXTRA_FLAGS" Default="" Mode="" Description="Extra rclone flags, e.g. --drive-shared-with-me (usually leave blank)." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+</Container>

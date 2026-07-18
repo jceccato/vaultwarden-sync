@@ -1,0 +1,13 @@
+# Secrets / local state -- never commit these
+.env
+config/rclone.conf
+rclone.conf
+*.conf
+!config/rclone.conf.example
+
+# Downloaded backups and working data
+downloads/
+*.tar.gz
+*.tar.gz.aes256
+*.aes256
+.last_restored
