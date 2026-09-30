@@ -206,40 +206,47 @@ latest_remote() {
 # harmless and never the reason, so it is left out.
 rclone_error() {
   local msg
-  msg="$(grep -E 'ERROR|Failed|error' "$1" 2>/dev/null | grep -v 'Failed to save config' \
-    | tail -n 2 | sed -E 's#^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9:]{8} ##' | tr '\n' ' ' | head -c 300)"
+  # --progress output can carry carriage returns and colour codes; strip them
+  # so they never reach a notification.
+  msg="$(tr -d '\r' < "$1" 2>/dev/null | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' \
+    | grep -E 'ERROR|Failed|error' | grep -v 'Failed to save config' \
+    | tail -n 2 | sed -E 's#^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9:]{8} ##' | tr '\n' ' ' | head -c 300)" || true
   printf '%s' "${msg% }"
 }
 
-# unreachable <what failed> - Drive could not be listed or read. Notify, then
-# stop without touching anything.
-unreachable() {
+# abort_unreachable <what failed> - Drive could not be listed or read. Notify,
+# then stop without touching anything.
+abort_unreachable() {
   notify medium "Vaultwarden Backup Unreachable" \
     "$1. The live vault was left as it was, and goes stale until this is fixed; this repeats every run. Test with: rclone lsf $REMOTE"
   die "$1. Live vault left untouched."
 }
 
-# no_backup <what was found> - Drive answered, but there is no backup to apply.
-no_backup() {
+# abort_missing <what was found> - Drive answered, but there is no backup to
+# apply. Notify, then stop without touching anything.
+abort_missing() {
   notify medium "Vaultwarden Backup Missing" \
     "Google Drive answered, but $1. The live vault was left as it was, and goes stale until a backup arrives; this repeats every run. Check the backup source and RCLONE_PATH."
   die "No backup to restore: $1. Live vault left untouched."
 }
 
-# Print the newest backup filename on the remote. A remote that cannot be
-# listed is unreachable; a folder that is absent (rclone exits 3) or holds no
-# backup is no backup. Either ends the run, notified.
+# Print the newest backup filename on the remote, or end the run, notified.
+# Unlike latest_remote it tells "Drive is down" from "Drive has nothing": the
+# first is a token or network to fix, the second a backup source that stopped,
+# and they are acted on differently. rclone exits 3 when the folder itself is
+# absent, which is the second kind.
 newest_backup() {
-  [ -f "$RCLONE_CONF" ] || unreachable "rclone config not found: $RCLONE_CONF"
-  local errf="${TMPDIR:-/tmp}/vwlsf.$$" listing rc=0
+  [ -f "$RCLONE_CONF" ] || abort_unreachable "rclone config not found: $RCLONE_CONF"
+  local errf listing rc=0 why
+  errf="$(mktemp "${TMPDIR:-/tmp}/vwlsf.XXXXXX")"
   listing="$(rclone_cmd lsf "$REMOTE" --files-only --include "$BACKUP_GLOB" 2>"$errf")" || rc=$?
-  local why; why="$(rclone_error "$errf")"; rm -f "$errf"
+  why="$(rclone_error "$errf")"; rm -f "$errf"
   case "$rc" in
     0) ;;
-    3) no_backup "the folder $REMOTE does not exist (${why:-rclone exited 3})" ;;
-    *) unreachable "Could not list backups at $REMOTE (${why:-rclone exited $rc})" ;;
+    3) abort_missing "the folder $REMOTE does not exist (${why:-rclone exited 3})" ;;
+    *) abort_unreachable "Could not list backups at $REMOTE (${why:-rclone exited $rc})" ;;
   esac
-  [ -n "$listing" ] || no_backup "$REMOTE holds no backup matching $BACKUP_GLOB"
+  [ -n "$listing" ] || abort_missing "$REMOTE holds no backup matching $BACKUP_GLOB"
   printf '%s\n' "$listing" | sort | tail -n 1
 }
 
@@ -252,11 +259,12 @@ download_backup() {
   local name="$1"
   mkdir -p "$WORK_DIR"
   log "Downloading '$name' from $REMOTE ..."
-  local errf="${TMPDIR:-/tmp}/vwcopy.$$" rc=0 why
+  local errf rc=0 why
+  errf="$(mktemp "${TMPDIR:-/tmp}/vwcopy.XXXXXX")"
   rclone_cmd copy "$REMOTE/$name" "$WORK_DIR" --progress 2>&1 | tee "$errf" | sed 's/^/    /' >&2 || rc=$?
   why="$(rclone_error "$errf")"; rm -f "$errf"
   if [ "$rc" -ne 0 ] || [ ! -f "$WORK_DIR/$name" ]; then
-    unreachable "Could not download $name from $REMOTE (${why:-rclone exited $rc})"
+    abort_unreachable "Could not download $name from $REMOTE (${why:-rclone exited $rc})"
   fi
   printf '%s' "$WORK_DIR/$name"
 }
@@ -503,7 +511,9 @@ cmd_status() {
   echo "Remote          : $REMOTE"
   echo "Newest on remote: ${newest:-<none>}"
   echo "Last restored   : ${prev:-<none>}"
-  if [ -n "$newest" ] && [ "$newest" != "$prev" ]; then
+  if [ -z "$newest" ]; then
+    echo "Status          : NO backup found, or Drive unreachable (a sync would notify)"
+  elif [ "$newest" != "$prev" ]; then
     echo "Status          : NEW backup available"
   else
     echo "Status          : up to date"

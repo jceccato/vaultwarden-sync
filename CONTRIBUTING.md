@@ -51,8 +51,9 @@ intentional - read the comment before removing them.
 
 ### Testing
 
-The freshness check (a backup must be newer than the live vault) has an
-automated test, run inside the image so every tool is the real one:
+The freshness check (a backup must be newer than the live vault) and the
+Drive failures (unreachable, no backup, a failed download) have an automated
+test, run inside the image so every tool is the real one:
 
 ```bash
 docker build -t vaultwarden-sync:test .

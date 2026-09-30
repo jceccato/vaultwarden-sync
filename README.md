@@ -279,7 +279,7 @@ docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh sync --force
 `--force` also skips the freshness check, so this re-applies a backup the
 standby already holds.
 
-The freshness check has its own tests, run inside the image:
+The freshness check and the Drive failures have their own tests, run inside the image:
 
 ```bash
 docker build -t vaultwarden-sync:test .

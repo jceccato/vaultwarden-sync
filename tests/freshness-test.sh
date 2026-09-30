@@ -76,7 +76,7 @@ exit 0
 EOF
   # rclone: lsf lists the fake Drive, copy copies from it; the remote prefix
   # (gdrive:bw_backups/) is stripped. Every call first prints the harmless
-  # "Failed to save config" line the real one prints on hostnas. Drive breaks
+  # "Failed to save config" line the real one prints with a single-file config mount. Drive breaks
   # like the real rclone breaks: drive_down (exit 1, the remote not found),
   # drive_nodir (exit 3, the folder not found), copy_fails (exit 1 on copy).
   cat > "$T/bin/rclone" <<EOF
