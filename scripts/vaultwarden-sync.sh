@@ -191,7 +191,7 @@ stage_and_validate() {
       ;;
   esac
 
-  # The bwgc backup stores db.sqlite3 at the archive root and the rest under data/.
+  # db.sqlite3 is at the archive root in both layouts apply_backup accepts.
   [ -f "$staging/db.sqlite3" ] || { rm -rf "$staging"; die "Backup does not contain db.sqlite3 -- refusing to restore."; }
 
   log "Verifying SQLite integrity of restored database..."
@@ -231,27 +231,32 @@ apply_backup() {
   cp "$staging/db.sqlite3" "$APPDATA_DIR/db.sqlite3"
   chmod 644 "$APPDATA_DIR/db.sqlite3" || true
 
-  if [ -d "$staging/data/attachments" ]; then
+  # The rest sits under data/ in a bwgc_backup archive, but at the archive root
+  # in one made by bitwarden_gcloud's utilities/backup.sh. Accept either.
+  local src="$staging"
+  [ -d "$staging/data" ] && src="$staging/data"
+
+  if [ -d "$src/attachments" ]; then
     log "Applying attachments..."
     rm -rf "$APPDATA_DIR/attachments"
-    cp -a "$staging/data/attachments" "$APPDATA_DIR/"
+    cp -a "$src/attachments" "$APPDATA_DIR/"
   fi
 
-  if [ -d "$staging/data/sends" ]; then
+  if [ -d "$src/sends" ]; then
     log "Applying sends..."
     rm -rf "$APPDATA_DIR/sends"
-    cp -a "$staging/data/sends" "$APPDATA_DIR/"
+    cp -a "$src/sends" "$APPDATA_DIR/"
   fi
 
-  if [ -f "$staging/data/config.json" ]; then
+  if [ -f "$src/config.json" ]; then
     log "Applying config.json..."
-    cp -f "$staging/data/config.json" "$APPDATA_DIR/config.json"
+    cp -f "$src/config.json" "$APPDATA_DIR/config.json"
   fi
 
   # RSA keys (rsa_key.der / rsa_key.pem / rsa_key.pub.der etc.)
-  if find "$staging/data" -maxdepth 1 -name 'rsa_key*' -type f 2>/dev/null | grep -q .; then
+  if find "$src" -maxdepth 1 -name 'rsa_key*' -type f 2>/dev/null | grep -q .; then
     log "Applying RSA keys..."
-    find "$staging/data" -maxdepth 1 -name 'rsa_key*' -type f -exec cp -f {} "$APPDATA_DIR/" \;
+    find "$src" -maxdepth 1 -name 'rsa_key*' -type f -exec cp -f {} "$APPDATA_DIR/" \;
   fi
 
   # The backup may include .env from the GCloud compose stack. It does NOT apply
