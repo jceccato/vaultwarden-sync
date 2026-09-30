@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# freshness-test.sh - the freshness check, tested from outside.
+# freshness-test.sh - the freshness check, and Drive failing, tested from outside.
 #
 # Feeds vaultwarden-sync.sh backups older, equal and newer than the vault it
-# would replace, and observes what a person would: is the live vault changed,
-# was the Vaultwarden container stopped, did a notification go out.
+# would replace, and a Drive that cannot be reached, holds no backup or fails a
+# download, and observes what a person would: is the live vault changed, was
+# the Vaultwarden container stopped, did a notification go out.
 #
 # Only the edges of the machine are stubbed: docker (the container), rclone
 # (Google Drive) and curl (the notification hub). Everything else is real:
@@ -26,6 +27,7 @@ pass=0; fail=0
 ok()   { pass=$((pass + 1)); printf '  ok   %s\n' "$*"; }
 bad()  { fail=$((fail + 1)); printf '  FAIL %s\n' "$*"; }
 check() { local what="$1"; shift; if "$@"; then ok "$what"; else bad "$what"; fi; }
+not() { ! "$@"; }
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -73,14 +75,33 @@ case "\$1" in inspect) echo running ;; esac
 exit 0
 EOF
   # rclone: lsf lists the fake Drive, copy copies from it; the remote prefix
-  # (gdrive:bw_backups/) is stripped.
+  # (gdrive:bw_backups/) is stripped. Every call first prints the harmless
+  # "Failed to save config" line the real one prints on hostnas. Drive breaks
+  # like the real rclone breaks: drive_down (exit 1, the remote not found),
+  # drive_nodir (exit 3, the folder not found), copy_fails (exit 1 on copy).
   cat > "$T/bin/rclone" <<EOF
 #!/bin/sh
 while [ "\$1" = --config ]; do shift 2; done
 cmd="\$1"; shift
+echo "2026/09/30 23:29:36 ERROR : Failed to save config after 10 tries: device or resource busy" >&2
+if [ -f "$T/drive_down" ]; then
+  echo "2026/09/30 23:29:31 Failed to create file system for \"nope:\": didn't find section in config file" >&2
+  exit 1
+fi
 case "\$cmd" in
-  lsf)  ls "$T/drive" ;;
-  copy) cp "$T/drive/\${1#*:*/}" "\$2/" ;;
+  lsf)
+    if [ -f "$T/drive_nodir" ]; then
+      echo "2026/09/30 23:29:38 ERROR : : error listing: directory not found" >&2
+      echo "2026/09/30 23:29:38 Failed to ls" >&2
+      exit 3
+    fi
+    ls "$T/drive" ;;
+  copy)
+    if [ -f "$T/copy_fails" ]; then
+      echo "2026/09/30 23:29:40 ERROR : Attempt 3/3 failed with 1 errors and: couldn't find file" >&2
+      exit 1
+    fi
+    cp "$T/drive/\${1#*:*/}" "\$2/" ;;
 esac
 EOF
   # curl: record the headers (reading any --header @file), URL and body of
@@ -212,6 +233,77 @@ make_backup "$T/downloads/bw_backup_2026-09-30-100000.tar.gz" "2026-09-29 23:07:
 run restore "$T/downloads/bw_backup_2026-09-30-100000.tar.gz"; rc=$?
 check "exits zero"                      [ "$rc" -eq 0 ]
 check "live vault is the backup's"      [ "$(label_of "$T/live/db.sqlite3")" = new ]
+teardown
+
+echo "sync: Drive cannot be reached, and says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-29 23:07:19" new
+touch "$T/drive_down"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "a notification was published"    notified
+check "  titled <host>: ... Unreachable" grep -q 'Title: testhost: Vaultwarden Backup Unreachable' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  with the publisher token"      grep -q 'Authorization: Bearer tk_test' "$T/notify.log"
+check "  naming the remote"             grep -q 'BODY .*gdrive:bw_backups' "$T/notify.log"
+check "  quoting rclone's error"        grep -q "didn't find section in config file" "$T/notify.log"
+check "  not the save-config noise"     not grep -q 'Failed to save config' "$T/notify.log"
+teardown
+
+echo "sync: Drive answers but holds no backup, and says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "a notification was published"    notified
+check "  titled <host>: ... Missing"    grep -q 'Title: testhost: Vaultwarden Backup Missing' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  saying no backup is there"     grep -q 'BODY .*gdrive:bw_backups holds no backup' "$T/notify.log"
+teardown
+
+echo "sync: Drive answers but the folder is not there, and says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+touch "$T/drive_nodir"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "Vaultwarden never stopped"       not_stopped
+check "  titled <host>: ... Missing"    grep -q 'Title: testhost: Vaultwarden Backup Missing' "$T/notify.log"
+check "  saying the folder is absent"   grep -q 'BODY .*gdrive:bw_backups does not exist' "$T/notify.log"
+teardown
+
+echo "sync: a backup that cannot be downloaded, and says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-29 23:07:19" new
+touch "$T/copy_fails"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "  titled <host>: ... Unreachable" grep -q 'Title: testhost: Vaultwarden Backup Unreachable' "$T/notify.log"
+check "  naming the backup"             grep -q 'BODY .*download bw_backup_2026-09-30-100000' "$T/notify.log"
+check "  quoting rclone's error"        grep -q "couldn't find file" "$T/notify.log"
+check "not recorded as restored"        [ ! -f "$T/downloads/.last_restored" ]
+teardown
+
+echo "sync: nothing new on Drive is still quiet"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-29 23:07:19" new
+echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
+run sync; rc=$?
+check "exits zero"                      [ "$rc" -eq 0 ]
+check "Vaultwarden never stopped"       not_stopped
+check "no notification"                 not_notified
 teardown
 
 echo

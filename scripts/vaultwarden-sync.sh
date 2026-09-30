@@ -8,6 +8,9 @@
 # Flow (the "sync" command):
 #   1. Find the newest bw_backup_* on the Google Drive remote (via rclone).
 #      If it is the same one we restored last time -> exit, nothing to do.
+#      If Drive cannot be listed or read, or holds no backup, send a
+#      notification and exit non-zero: the live vault would otherwise go stale
+#      without a word.
 #   2. Download it, decrypt (openssl aes256) and extract to a staging dir,
 #      then validate the SQLite DB BEFORE touching anything live.
 #      Refuse it, and send a notification, unless its vault is newer than the
@@ -63,8 +66,9 @@ UPDATE_METHOD="${UPDATE_METHOD:-watchtower}"
 WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-containrrr/watchtower}"
 VAULTWARDEN_IMAGE="${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}"
 
-# Notifications (ntfy). A refused backup is published here. Leave NTFY_URL empty
-# to disable; the refusal is still logged and still exits non-zero.
+# Notifications (ntfy). A refused, missing or unreachable backup is published
+# here. Leave NTFY_URL empty to disable; each is still logged and still exits
+# non-zero.
 NTFY_URL="${NTFY_URL:-}"                          # e.g. https://ntfy.example.net
 NTFY_TOPIC="${NTFY_TOPIC:-infra}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"                      # publisher token (SECRET)
@@ -188,10 +192,55 @@ update_container() {
 # Backup discovery / download
 # ---------------------------------------------------------------------------
 
-# Print the newest backup filename on the remote (or empty if none).
+# Print the newest backup filename on the remote (or empty if none, or if the
+# remote cannot be listed). For status; sync uses newest_backup, which tells
+# those apart.
 latest_remote() {
   rclone_cmd lsf "$REMOTE" --files-only --include "$BACKUP_GLOB" 2>/dev/null \
     | sort | tail -n 1
+}
+
+# rclone_error <stderr file> - the lines of rclone's stderr that say what went
+# wrong, on one line, without their timestamps. rclone on a read-only
+# single-file config also logs "Failed to save config" on every run, which is
+# harmless and never the reason, so it is left out.
+rclone_error() {
+  local msg
+  msg="$(grep -E 'ERROR|Failed|error' "$1" 2>/dev/null | grep -v 'Failed to save config' \
+    | tail -n 2 | sed -E 's#^[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9:]{8} ##' | tr '\n' ' ' | head -c 300)"
+  printf '%s' "${msg% }"
+}
+
+# unreachable <what failed> - Drive could not be listed or read. Notify, then
+# stop without touching anything.
+unreachable() {
+  notify medium "Vaultwarden Backup Unreachable" \
+    "$1. The live vault was left as it was, and goes stale until this is fixed; this repeats every run. Test with: rclone lsf $REMOTE"
+  die "$1. Live vault left untouched."
+}
+
+# no_backup <what was found> - Drive answered, but there is no backup to apply.
+no_backup() {
+  notify medium "Vaultwarden Backup Missing" \
+    "Google Drive answered, but $1. The live vault was left as it was, and goes stale until a backup arrives; this repeats every run. Check the backup source and RCLONE_PATH."
+  die "No backup to restore: $1. Live vault left untouched."
+}
+
+# Print the newest backup filename on the remote. A remote that cannot be
+# listed is unreachable; a folder that is absent (rclone exits 3) or holds no
+# backup is no backup. Either ends the run, notified.
+newest_backup() {
+  [ -f "$RCLONE_CONF" ] || unreachable "rclone config not found: $RCLONE_CONF"
+  local errf="${TMPDIR:-/tmp}/vwlsf.$$" listing rc=0
+  listing="$(rclone_cmd lsf "$REMOTE" --files-only --include "$BACKUP_GLOB" 2>"$errf")" || rc=$?
+  local why; why="$(rclone_error "$errf")"; rm -f "$errf"
+  case "$rc" in
+    0) ;;
+    3) no_backup "the folder $REMOTE does not exist (${why:-rclone exited 3})" ;;
+    *) unreachable "Could not list backups at $REMOTE (${why:-rclone exited $rc})" ;;
+  esac
+  [ -n "$listing" ] || no_backup "$REMOTE holds no backup matching $BACKUP_GLOB"
+  printf '%s\n' "$listing" | sort | tail -n 1
 }
 
 last_restored() {
@@ -203,8 +252,12 @@ download_backup() {
   local name="$1"
   mkdir -p "$WORK_DIR"
   log "Downloading '$name' from $REMOTE ..."
-  rclone_cmd copy "$REMOTE/$name" "$WORK_DIR" --progress 2>&1 | sed 's/^/    /' >&2 || true
-  [ -f "$WORK_DIR/$name" ] || die "Download failed: $WORK_DIR/$name not present."
+  local errf="${TMPDIR:-/tmp}/vwcopy.$$" rc=0 why
+  rclone_cmd copy "$REMOTE/$name" "$WORK_DIR" --progress 2>&1 | tee "$errf" | sed 's/^/    /' >&2 || rc=$?
+  why="$(rclone_error "$errf")"; rm -f "$errf"
+  if [ "$rc" -ne 0 ] || [ ! -f "$WORK_DIR/$name" ]; then
+    unreachable "Could not download $name from $REMOTE (${why:-rclone exited $rc})"
+  fi
   printf '%s' "$WORK_DIR/$name"
 }
 
@@ -398,11 +451,8 @@ cmd_sync() {
   local force="${1:-}"
   require rclone; require openssl; require tar; require sqlite3; require rsync; require docker
 
-  [ -f "$RCLONE_CONF" ] || die "rclone config not found: $RCLONE_CONF"
-
   local newest prev
-  newest="$(latest_remote || true)"
-  [ -n "$newest" ] || { log "No backups found at $REMOTE -- nothing to do."; return 0; }
+  newest="$(newest_backup)"
   prev="$(last_restored)"
 
   log "Newest on remote : $newest"

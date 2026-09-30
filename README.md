@@ -336,7 +336,7 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 | `SCHEDULE` | `0 3 * * *` | Cron for Mode A (run after the GCloud backup) |
 | `RUN_ON_START` | `false` | Mode A: also sync on container start |
 | `TZ` | `UTC` | Timezone for the schedule/logs |
-| `NTFY_URL` | *(empty)* | ntfy server to notify when a backup is refused; empty = log only |
+| `NTFY_URL` | *(empty)* | ntfy server to notify when a backup is refused, missing or unreachable; empty = log only |
 | `NTFY_TOPIC` | `infra` | ntfy topic |
 | `NTFY_TOKEN` | *(empty)* | ntfy publisher token (secret) |
 | `NOTIFY_HOST` | `vaultwarden-sync` | Named first in the notification title |
@@ -370,6 +370,12 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
   used; a day with none is refused, and says so.
   Logging in to the standby itself moves *its* device timestamps, so the next
   backup can be refused until some client uses the primary again.
+- **A missing backup is loud too.** If Drive cannot be listed or a download
+  fails, the run publishes *Vaultwarden Backup Unreachable*; if Drive answers
+  but the folder is absent or holds no `bw_backup_*`, *Vaultwarden Backup
+  Missing*. Either way nothing is stopped or changed and the run exits
+  non-zero, every run, until it is fixed. Without this the standby would go
+  stale in silence.
 - The DB's `-wal`/`-shm` sidecars are removed during restore so a stale WAL can't
   corrupt the freshly restored database.
 - `ROLLBACK_DIR` and `DOWNLOAD_DIR` **must be outside** `APPDATA_DIR`.
@@ -384,7 +390,8 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 |---------|--------------|
 | `Backup is encrypted (.aes256) but BACKUP_ENCRYPTION_KEY is empty` | Set the key in `.env` / script |
 | `Failed to decrypt/extract` | Wrong `BACKUP_ENCRYPTION_KEY` |
-| `No backups found at gdrive:...` | Wrong `RCLONE_PATH`, or remote auth/scope issue - test with `rclone lsf` |
+| `Could not list backups at gdrive:...` / `Could not download ...` | Wrong `RCLONE_REMOTE`, an expired or revoked Drive token, or no network - test with `rclone lsf` |
+| `No backup to restore: ...` | Wrong `RCLONE_PATH`, or the backup source has stopped uploading |
 | `SQLite integrity_check failed` | The downloaded backup is corrupt; it refuses to apply it |
 | `Refusing bw_backup_...: its newest revision ... is not newer than the live vault's ...` | The backup source is not producing fresh backups, or no client used the vault since the last one. Check the source; `restore <file> --force` applies it anyway |
 | Standby won't decrypt the vault after restore | `rsa_key*` missing from backup, or you logged in against the wrong server |
