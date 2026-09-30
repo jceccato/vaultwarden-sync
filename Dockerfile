@@ -17,6 +17,7 @@ RUN apk add --no-cache \
       docker-cli \
       tzdata \
       ca-certificates \
+      curl \
       tini
 
 COPY scripts/vaultwarden-sync.sh /usr/local/bin/vaultwarden-sync.sh

@@ -23,6 +23,11 @@ services:
 
       UPDATE_METHOD: ${UPDATE_METHOD:-watchtower}        # watchtower | pull | none
       VAULTWARDEN_IMAGE: ${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}
+
+      NTFY_URL: ${NTFY_URL:-}                  # ntfy server; empty = no notifications
+      NTFY_TOPIC: ${NTFY_TOPIC:-infra}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}              # ntfy publisher token (SECRET)
+      NOTIFY_HOST: ${NOTIFY_HOST:-vaultwarden-sync}  # named first in the title
     volumes:
       # control the vaultwarden container + run watchtower
       - /var/run/docker.sock:/var/run/docker.sock

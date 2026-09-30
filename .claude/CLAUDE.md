@@ -40,9 +40,10 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 
 | File | Purpose |
 |------|---------|
-| `scripts/vaultwarden-sync.sh` | Core logic. Subcommands: `sync` (default), `sync --force`, `restore <file>`, `rollback`, `status` |
+| `scripts/vaultwarden-sync.sh` | Core logic. Subcommands: `sync` (default), `sync --force`, `restore <file> [--force]`, `rollback`, `status` |
+| `tests/freshness-test.sh` | Tests of the freshness check; stubs docker/rclone/curl, runs inside the image |
 | `entrypoint.sh` | Container entrypoint: no args → busybox `crond` loop; a subcommand → run once and exit |
-| `Dockerfile` | alpine:3.20 + bash, rclone, openssl, sqlite, rsync, tar, docker-cli, tini |
+| `Dockerfile` | alpine:3.20 + bash, rclone, openssl, sqlite, rsync, tar, docker-cli, curl, tini |
 | `docker-compose.yml` | **Mode A** - persistent self-scheduling helper (compose) |
 | `unraid-user-script.sh` | **Mode B** - ephemeral `docker run ... sync` via User Scripts plugin |
 | `unraid/my-vaultwarden-sync.xml` | **Mode C** - Unraid GUI template for the helper |
@@ -59,11 +60,17 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 3. **`stage_and_validate`** (nothing live touched yet): decrypt (if `.aes256`) +
    extract to a temp dir, require `db.sqlite3`, run `PRAGMA integrity_check`.
    Any failure aborts here - the standby keeps running on old data.
+   Then **`check_fresh`** (unless `--force`): the staged vault's newest
+   timestamp (users, ciphers, folders, devices, sends) must be strictly newer
+   than the live vault's, read with `sqlite3 -readonly`. Otherwise `refuse`:
+   notify via ntfy (`NTFY_URL`/`NTFY_TOKEN`), exit non-zero, `.last_restored`
+   untouched. Tests: `tests/freshness-test.sh`, run inside the image.
 4. `stop_container` (docker stop).
 5. `rotate_rollback`: `rsync -a --delete APPDATA → ROLLBACK` (clear + copy).
    Skipped on first run when appdata has no `db.sqlite3`.
 6. `apply_backup`: remove old `db.sqlite3` + `-wal`/`-shm`, copy new db, then
-   replace attachments/sends/config.json/rsa_key* from `data/`.
+   replace attachments/sends/config.json/rsa_key* from `data/` if the archive
+   has one, else from its root (bitwarden_gcloud's `utilities/backup.sh`).
 7. `update_container` (see UPDATE_METHOD).
 8. `start_container`, then write `.last_restored`, prune old downloads.
 
@@ -112,7 +119,8 @@ Drive via `rclone sync`. Verified against the actual source, not just docs:
 (/config/rclone.conf), `RCLONE_REMOTE` (gdrive), `RCLONE_PATH` (bw_backups =
 `BACKUP_RCLONE_DEST`), `RCLONE_EXTRA_FLAGS`, `BACKUP_ENCRYPTION_KEY` (secret),
 `UPDATE_METHOD` (watchtower|pull|none), `VAULTWARDEN_IMAGE`, `SCHEDULE`
-(`0 3 * * *`), `RUN_ON_START` (false), `TZ`.
+(`0 3 * * *`), `RUN_ON_START` (false), `TZ`, `NTFY_URL`, `NTFY_TOPIC` (infra),
+`NTFY_TOKEN` (secret), `NOTIFY_HOST` (vaultwarden-sync).
 
 ## Current setup status (as of last session)
 

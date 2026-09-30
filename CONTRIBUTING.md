@@ -51,7 +51,15 @@ intentional - read the comment before removing them.
 
 ### Testing
 
-There is no automated test suite. Manual testing steps:
+The freshness check (a backup must be newer than the live vault) has an
+automated test, run inside the image so every tool is the real one:
+
+```bash
+docker build -t vaultwarden-sync:test .
+docker run --rm -v "$PWD:/src:ro" --entrypoint bash vaultwarden-sync:test /src/tests/freshness-test.sh
+```
+
+Everything else is tested by hand:
 
 1. **Build the image:** `docker build -t vaultwarden-sync .`
 2. **Run the status command** (read-only, safe anywhere):

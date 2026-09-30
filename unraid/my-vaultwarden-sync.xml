@@ -63,5 +63,13 @@
 
   <Config Name="VAULTWARDEN_IMAGE" Target="VAULTWARDEN_IMAGE" Default="vaultwarden/server:latest" Mode="" Description="Image used only by UPDATE_METHOD=pull." Type="Variable" Display="advanced" Required="false" Mask="false">vaultwarden/server:latest</Config>
 
+  <Config Name="NTFY_URL" Target="NTFY_URL" Default="" Mode="" Description="ntfy server to notify when a backup is refused for not being newer than the live vault. Blank = log only." Type="Variable" Display="always" Required="false" Mask="false"/>
+
+  <Config Name="NTFY_TOPIC" Target="NTFY_TOPIC" Default="infra" Mode="" Description="ntfy topic for the notification." Type="Variable" Display="advanced" Required="false" Mask="false">infra</Config>
+
+  <Config Name="NTFY_TOKEN" Target="NTFY_TOKEN" Default="" Mode="" Description="ntfy publisher token." Type="Variable" Display="always" Required="false" Mask="true"/>
+
+  <Config Name="NOTIFY_HOST" Target="NOTIFY_HOST" Default="vaultwarden-sync" Mode="" Description="Named first in the notification title (e.g. the host's short name)." Type="Variable" Display="advanced" Required="false" Mask="false">vaultwarden-sync</Config>
+
   <Config Name="RCLONE_EXTRA_FLAGS" Target="RCLONE_EXTRA_FLAGS" Default="" Mode="" Description="Extra rclone flags, e.g. --drive-shared-with-me (usually leave blank)." Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

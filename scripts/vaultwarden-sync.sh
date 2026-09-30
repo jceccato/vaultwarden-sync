@@ -10,6 +10,8 @@
 #      If it is the same one we restored last time -> exit, nothing to do.
 #   2. Download it, decrypt (openssl aes256) and extract to a staging dir,
 #      then validate the SQLite DB BEFORE touching anything live.
+#      Refuse it, and send a notification, unless its vault is newer than the
+#      live one (see check_fresh). Without --force a stale backup never lands.
 #   3. Stop the local Vaultwarden container.
 #   4. Mirror the current appdata into the "rollback" dir (clear + copy).
 #   5. Apply the validated backup over appdata.
@@ -22,8 +24,10 @@
 #
 # Subcommands:
 #   sync                 (default) download newest + restore if it is new
-#   sync --force         restore the newest even if already restored
+#   sync --force         restore the newest even if already restored, and even
+#                        if it is not newer than the live vault
 #   restore <file>       restore a specific local backup file (DR drill / manual)
+#   restore <file> --force   ... even if it is not newer than the live vault
 #   rollback             restore appdata from the rollback dir (undo last restore)
 #   status               show last-restored, newest-remote and container state
 #
@@ -59,6 +63,13 @@ UPDATE_METHOD="${UPDATE_METHOD:-watchtower}"
 WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-containrrr/watchtower}"
 VAULTWARDEN_IMAGE="${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}"
 
+# Notifications (ntfy). A refused backup is published here. Leave NTFY_URL empty
+# to disable; the refusal is still logged and still exits non-zero.
+NTFY_URL="${NTFY_URL:-}"                          # e.g. https://ntfy.example.net
+NTFY_TOPIC="${NTFY_TOPIC:-infra}"
+NTFY_TOKEN="${NTFY_TOKEN:-}"                      # publisher token (SECRET)
+NOTIFY_HOST="${NOTIFY_HOST:-vaultwarden-sync}"    # named first in the title
+
 BACKUP_GLOB="${BACKUP_GLOB:-bw_backup_*}"
 LOCK_DIR="${LOCK_DIR:-/tmp/vaultwarden-sync.lock}"
 
@@ -74,7 +85,46 @@ die()   { err "$*"; exit 1; }
 
 require() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
 
+# RCLONE_EXTRA_FLAGS is split on purpose: it may hold several flags.
+# shellcheck disable=SC2086
 rclone_cmd() { rclone --config "$RCLONE_CONF" $RCLONE_EXTRA_FLAGS "$@"; }
+
+# The token reaches curl as a header file on a file descriptor, never in argv,
+# which ps shows. No token, no header.
+auth_header() {
+  if [ -n "$NTFY_TOKEN" ]; then printf 'Authorization: Bearer %s\n' "$NTFY_TOKEN"; fi
+}
+
+# notify <low|medium|high> <title> <message> - publish to ntfy, never fail.
+# The title is "<NOTIFY_HOST>: <title>". The message goes on stdin, so a leading
+# @ in it is not read as a filename by curl.
+notify() {
+  local priority
+  case "$1" in
+    low) priority=2 ;; medium) priority=3 ;; high) priority=4 ;;
+    *) warn "notify: invalid severity '$1'; nothing published: $2"; return 0 ;;
+  esac
+  if [ -z "$NTFY_URL" ]; then
+    warn "NTFY_URL is not set; notification not sent: $2"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found; notification not sent: $2"
+    return 0
+  fi
+  if printf '%s' "$3" | curl --silent --show-error --fail --output /dev/null \
+        --max-time 10 --retry 5 --retry-delay 10 --retry-connrefused \
+        --header @<(auth_header) \
+        --header "Title: $NOTIFY_HOST: $2" \
+        --header "Priority: $priority" \
+        --data-binary @- \
+        "${NTFY_URL%/}/$NTFY_TOPIC"; then
+    log "Notification sent: $NOTIFY_HOST: $2"
+  else
+    warn "Notification to $NTFY_URL/$NTFY_TOPIC failed: $2"
+  fi
+  return 0
+}
 
 # Acquire a simple lock so two runs can't overlap (mkdir is atomic).
 acquire_lock() {
@@ -207,6 +257,56 @@ stage_and_validate() {
 }
 
 # ---------------------------------------------------------------------------
+# Freshness: never replace the live vault with one that is not newer
+# ---------------------------------------------------------------------------
+
+# Print a vault's newest revision: the latest timestamp Vaultwarden writes when
+# the vault changes or a client syncs. Diesel stores them as sortable text
+# ("YYYY-MM-DD HH:MM:SS.fffffffff"), so max() and string comparison order them.
+# Opened read-only: reading the live vault must never change it.
+vault_revision() {
+  sqlite3 -readonly "$1" "
+    SELECT max(t) FROM (
+      SELECT max(updated_at)    AS t FROM users   UNION ALL
+      SELECT max(updated_at)         FROM ciphers UNION ALL
+      SELECT max(deleted_at)         FROM ciphers UNION ALL
+      SELECT max(updated_at)         FROM folders UNION ALL
+      SELECT max(updated_at)         FROM devices UNION ALL
+      SELECT max(revision_date)      FROM sends
+    );"
+}
+
+# refuse <backup name> <reason> - notify, then stop without touching anything.
+refuse() {
+  notify medium "Vaultwarden Backup Refused" \
+    "$1 was not applied: $2. The live vault was left as it was. If the backup source is stuck, this repeats every run until it is fixed; to apply this backup anyway, run: vaultwarden-sync.sh restore $1 --force"
+  die "Refusing $1: $2. Live vault left untouched."
+}
+
+# check_fresh <staging dir> <backup name> - refuse unless the staged vault is
+# strictly newer than the live one. A frozen backup looks exactly like
+# yesterday's, so "equal" is refused too.
+check_fresh() {
+  local staging="$1" name="$2" new cur
+  if [ ! -f "$APPDATA_DIR/db.sqlite3" ]; then
+    log "No live vault yet -- freshness check skipped."
+    return 0
+  fi
+  local errf="${TMPDIR:-/tmp}/vwrev.$$"
+  new="$(vault_revision "$staging/db.sqlite3" 2>"$errf")" \
+    || refuse "$name" "could not read the backup's newest revision ($(head -c 300 "$errf"))"
+  cur="$(vault_revision "$APPDATA_DIR/db.sqlite3" 2>"$errf")" \
+    || refuse "$name" "could not read the live vault's newest revision ($(head -c 300 "$errf"))"
+  rm -f "$errf"
+  [ -n "$new" ] || refuse "$name" "the backup's vault has no revision timestamps"
+  log "Newest revision  : backup $new, live ${cur:-<none>}"
+  if [[ ! "$new" > "$cur" ]]; then
+    refuse "$name" "its newest revision $new is not newer than the live vault's $cur"
+  fi
+  log "Backup is newer than the live vault."
+}
+
+# ---------------------------------------------------------------------------
 # Rollback mirror + apply
 # ---------------------------------------------------------------------------
 rotate_rollback() {
@@ -269,11 +369,17 @@ apply_backup() {
 
 # Full restore pipeline from a local file: stop -> rollback -> apply -> update -> start.
 restore_from_file() {
-  local file="$1"
+  local file="$1" force="${2:-}"
   local staging
   staging="$(stage_and_validate "$file")"
   # shellcheck disable=SC2064
   trap "rm -rf '$staging'; rmdir '$LOCK_DIR' 2>/dev/null || true" EXIT
+
+  if [ "$force" = "--force" ]; then
+    warn "--force: freshness check skipped; applying $(basename "$file") whatever its age."
+  else
+    check_fresh "$staging" "$(basename "$file")"
+  fi
 
   stop_container
   rotate_rollback
@@ -310,7 +416,7 @@ cmd_sync() {
   local local_file
   local_file="$(download_backup "$newest")"
 
-  restore_from_file "$local_file"
+  restore_from_file "$local_file" "$force"
 
   printf '%s' "$newest" > "$STATE_FILE"
   log "Recorded last-restored: $newest"
@@ -320,12 +426,12 @@ cmd_sync() {
 }
 
 cmd_restore() {
-  local file="${1:-}"
-  [ -n "$file" ] || die "Usage: $0 restore <backup-file>"
+  local file="${1:-}" force="${2:-}"
+  [ -n "$file" ] || die "Usage: $0 restore <backup-file> [--force]"
   require openssl; require tar; require sqlite3; require rsync; require docker
   # Allow a bare filename that lives in WORK_DIR.
   [ -f "$file" ] || file="$WORK_DIR/$file"
-  restore_from_file "$file"
+  restore_from_file "$file" "$force"
 }
 
 cmd_rollback() {
@@ -361,10 +467,10 @@ main() {
   local cmd="${1:-sync}"; shift || true
   case "$cmd" in
     sync)     acquire_lock; cmd_sync "${1:-}" ;;
-    restore)  acquire_lock; cmd_restore "${1:-}" ;;
+    restore)  acquire_lock; cmd_restore "${1:-}" "${2:-}" ;;
     rollback) acquire_lock; cmd_rollback ;;
     status)   cmd_status ;;
-    *)        die "Unknown command '$cmd'. Use: sync | restore <file> | rollback | status" ;;
+    *)        die "Unknown command '$cmd'. Use: sync [--force] | restore <file> [--force] | rollback | status" ;;
   esac
 }
 

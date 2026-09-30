@@ -23,6 +23,9 @@ RCLONE_PATH="bw_backups"
 BACKUP_ENCRYPTION_KEY="CHANGE_ME"        # openssl passphrase (keep an offline copy!)
 UPDATE_METHOD="watchtower"               # watchtower | pull | none
 TZ="Australia/Brisbane"
+NTFY_URL=""                              # ntfy server for a refused backup; blank = log only
+NTFY_TOKEN=""                            # ntfy publisher token
+NOTIFY_HOST="$(hostname -s)"             # named first in the notification title
 # --------------------------------------------------------------------------
 
 mkdir -p "$ROLLBACK_DIR" "$DOWNLOAD_DIR"
@@ -34,6 +37,9 @@ docker run --rm \
   -e RCLONE_PATH="$RCLONE_PATH" \
   -e BACKUP_ENCRYPTION_KEY="$BACKUP_ENCRYPTION_KEY" \
   -e UPDATE_METHOD="$UPDATE_METHOD" \
+  -e NTFY_URL="$NTFY_URL" \
+  -e NTFY_TOKEN="$NTFY_TOKEN" \
+  -e NOTIFY_HOST="$NOTIFY_HOST" \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$APPDATA_DIR":/data/live \
   -v "$ROLLBACK_DIR":/data/rollback \

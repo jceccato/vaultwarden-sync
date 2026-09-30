@@ -276,6 +276,16 @@ docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh status
 docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh sync --force
 ```
 
+`--force` also skips the freshness check, so this re-applies a backup the
+standby already holds.
+
+The freshness check has its own tests, run inside the image:
+
+```bash
+docker build -t vaultwarden-sync:test .
+docker run --rm -v "$PWD:/src:ro" --entrypoint bash vaultwarden-sync:test /src/tests/freshness-test.sh
+```
+
 Then open the local Vaultwarden web UI and log in with your real credentials to
 confirm the vault decrypts. **If login works on the standby, your DR copy is
 real.** (If it doesn't, the encryption key or rsa_keys didn't come across -
@@ -295,6 +305,13 @@ docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh rollback
 
 ```bash
 docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh restore bw_backup_2026-06-30-031500.tar.gz.aes256
+```
+
+A backup that is not newer than the live vault is refused (see Safety notes).
+To apply one anyway, on purpose, add `--force`:
+
+```bash
+docker exec vaultwarden-sync /usr/local/bin/vaultwarden-sync.sh restore bw_backup_2026-06-30-031500.tar.gz.aes256 --force
 ```
 
 ---
@@ -319,6 +336,10 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 | `SCHEDULE` | `0 3 * * *` | Cron for Mode A (run after the GCloud backup) |
 | `RUN_ON_START` | `false` | Mode A: also sync on container start |
 | `TZ` | `UTC` | Timezone for the schedule/logs |
+| `NTFY_URL` | *(empty)* | ntfy server to notify when a backup is refused; empty = log only |
+| `NTFY_TOPIC` | `infra` | ntfy topic |
+| `NTFY_TOKEN` | *(empty)* | ntfy publisher token (secret) |
+| `NOTIFY_HOST` | `vaultwarden-sync` | Named first in the notification title |
 
 ### About `UPDATE_METHOD`
 
@@ -337,6 +358,18 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 - **Live data is only touched after** the backup downloads, decrypts, extracts,
   and passes a `PRAGMA integrity_check`. A bad/partial download aborts before the
   container is stopped - your standby stays up on its previous data.
+- **A backup must be newer than the vault it replaces.** Before stopping
+  anything, the newest timestamp in the backup's vault (users, ciphers, folders,
+  devices, sends) is compared with the live vault's. If the backup is not
+  strictly newer, it is refused: nothing is stopped or changed, a notification
+  is sent to `NTFY_URL` if set, and the run exits non-zero. It is not recorded
+  as restored, so every run repeats the refusal until the source is fixed. This
+  catches a backup job that keeps uploading the same frozen database. `--force`
+  skips the check. Device timestamps move whenever a client syncs, so a day
+  with no vault edits still gives a newer backup as long as some client was
+  used; a day with none is refused, and says so.
+  Logging in to the standby itself moves *its* device timestamps, so the next
+  backup can be refused until some client uses the primary again.
 - The DB's `-wal`/`-shm` sidecars are removed during restore so a stale WAL can't
   corrupt the freshly restored database.
 - `ROLLBACK_DIR` and `DOWNLOAD_DIR` **must be outside** `APPDATA_DIR`.
@@ -353,6 +386,7 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 | `Failed to decrypt/extract` | Wrong `BACKUP_ENCRYPTION_KEY` |
 | `No backups found at gdrive:...` | Wrong `RCLONE_PATH`, or remote auth/scope issue - test with `rclone lsf` |
 | `SQLite integrity_check failed` | The downloaded backup is corrupt; it refuses to apply it |
+| `Refusing bw_backup_...: its newest revision ... is not newer than the live vault's ...` | The backup source is not producing fresh backups, or no client used the vault since the last one. Check the source; `restore <file> --force` applies it anyway |
 | Standby won't decrypt the vault after restore | `rsa_key*` missing from backup, or you logged in against the wrong server |
 | Update step warns but continues | watchtower couldn't reach a registry; container still starts on current image |
 
