@@ -75,6 +75,11 @@ NTFY_TOKEN="${NTFY_TOKEN:-}"                      # publisher token (SECRET)
 NOTIFY_HOST="${NOTIFY_HOST:-vaultwarden-sync}"    # named first in the title
 
 BACKUP_GLOB="${BACKUP_GLOB:-bw_backup_*}"
+# A newest backup older than this means the source has stopped uploading. Its
+# age is read from its name (..._YYYY-MM-DD-HHMMSS...), in BACKUP_TZ: the zone
+# the backup source stamps names in (empty = this container's TZ).
+MAX_BACKUP_AGE_HOURS="${MAX_BACKUP_AGE_HOURS:-36}"
+BACKUP_TZ="${BACKUP_TZ:-}"
 LOCK_DIR="${LOCK_DIR:-/tmp/vaultwarden-sync.lock}"
 
 REMOTE="${RCLONE_REMOTE}:${RCLONE_PATH}"
@@ -248,6 +253,43 @@ newest_backup() {
   esac
   [ -n "$listing" ] || abort_missing "$REMOTE holds no backup matching $BACKUP_GLOB"
   printf '%s\n' "$listing" | sort | tail -n 1
+}
+
+# backup_epoch <name> - the time in a backup's name (..._YYYY-MM-DD-HHMMSS...)
+# as epoch seconds, read in BACKUP_TZ; nothing if the name carries no time.
+backup_epoch() {
+  local ts
+  ts="$(printf '%s' "$1" \
+    | sed -nE 's/.*([0-9]{4}-[0-9]{2}-[0-9]{2})-([0-9]{2})([0-9]{2})([0-9]{2}).*/\1 \2:\3:\4/p')"
+  [ -n "$ts" ] || return 0
+  if [ -n "$BACKUP_TZ" ]; then
+    TZ="$BACKUP_TZ" date -d "$ts" +%s 2>/dev/null || true
+  else
+    date -d "$ts" +%s 2>/dev/null || true
+  fi
+}
+
+# check_stalled <name> - notify, and fail, when the newest backup is older than
+# MAX_BACKUP_AGE_HOURS: the source has stopped uploading, and every run would
+# otherwise find "nothing new" and stay quiet. Applying it, if it is new, is
+# still up to the caller.
+check_stalled() {
+  local name="$1" stamp now limit="$MAX_BACKUP_AGE_HOURS"
+  if [[ ! "$limit" =~ ^[0-9]+$ ]] || [ "$limit" -eq 0 ]; then
+    warn "MAX_BACKUP_AGE_HOURS='$limit' is not a whole number of hours; using 36."
+    limit=36
+  fi
+  stamp="$(backup_epoch "$name")"
+  if [ -z "$stamp" ]; then
+    warn "Cannot read a date from '$name'; its age was not checked."
+    return 0
+  fi
+  now="$(date +%s)"
+  [ $((now - stamp)) -gt $((limit * 3600)) ] || return 0
+  notify medium "Vaultwarden Backup Stalled" \
+    "The newest backup at $REMOTE is $name, $(((now - stamp) / 3600)) hours old (the limit is $limit). The backup source has stopped uploading, so the live vault is no newer than that backup and goes stale until it resumes; this repeats every run. Check the backup job on the source."
+  err "The newest backup, $name, is $(((now - stamp) / 3600)) hours old (limit $limit): the backup source has stalled."
+  return 1
 }
 
 last_restored() {
@@ -459,14 +501,17 @@ cmd_sync() {
   local force="${1:-}"
   require rclone; require openssl; require tar; require sqlite3; require rsync; require docker
 
-  local newest prev
+  local newest prev stalled=0
   newest="$(newest_backup)"
   prev="$(last_restored)"
 
   log "Newest on remote : $newest"
   log "Last restored    : ${prev:-<none>}"
 
+  check_stalled "$newest" || stalled=1
+
   if [ "$newest" = "$prev" ] && [ "$force" != "--force" ]; then
+    [ "$stalled" -eq 0 ] || die "Already restored the newest backup, and it is stale. Live vault left untouched."
     log "Already restored the newest backup -- nothing to do. (Use --force to redo.)"
     return 0
   fi
@@ -481,6 +526,10 @@ cmd_sync() {
 
   # Tidy WORK_DIR: keep only the backup we just restored.
   find "$WORK_DIR" -maxdepth 1 -type f -name "$BACKUP_GLOB" ! -name "$newest" -delete 2>/dev/null || true
+
+  # Applied, but it was already stale: the source is still stuck, so the run
+  # still fails, as it does when there is nothing new to apply.
+  [ "$stalled" -eq 0 ] || die "Applied $newest, but it is stale: the backup source has stalled."
 }
 
 cmd_restore() {

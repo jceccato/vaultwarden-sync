@@ -22,6 +22,7 @@ set -uo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$SRC/scripts/vaultwarden-sync.sh"
+REAL_DATE="$(command -v date)"
 
 pass=0; fail=0
 ok()   { pass=$((pass + 1)); printf '  ok   %s\n' "$*"; }
@@ -116,6 +117,13 @@ done
 { echo "ARGS \${args[*]}"; echo "BODY \$(cat)"; } >> "$T/notify.log"
 exit 0
 EOF
+  # date: the clock. "date +%s" (now) answers FAKE_NOW; everything else, such
+  # as reading a backup's name as a date, is the real date.
+  cat > "$T/bin/date" <<EOF
+#!/bin/sh
+if [ "\$*" = "+%s" ]; then echo "\$FAKE_NOW"; exit 0; fi
+exec $REAL_DATE "\$@"
+EOF
   chmod +x "$T/bin/"*
 
   export PATH="$T/bin:$PATH"
@@ -125,7 +133,14 @@ EOF
   export RCLONE_CONF="$T/rclone.conf"; : > "$RCLONE_CONF"
   export UPDATE_METHOD=none BACKUP_ENCRYPTION_KEY=""
   export NTFY_URL="https://hub.example" NTFY_TOPIC="infra" NTFY_TOKEN="tk_test" NOTIFY_HOST="testhost"
+  # hostnas runs in Brisbane, the zone bw2 stamps its backup names in. Now is
+  # the daily run on 2026-10-01 unless a test moves it.
+  export TZ=Australia/Brisbane
+  FAKE_NOW="$(at '2026-10-01 11:30:00')"; export FAKE_NOW
 }
+
+# at <local time> - that time in Brisbane as epoch seconds.
+at() { TZ=Australia/Brisbane "$REAL_DATE" -d "$1" +%s; }
 teardown() { rm -rf "$T"; }
 
 run() { "$SCRIPT" "$@" > "$T/out.log" 2>&1; }
@@ -304,6 +319,79 @@ run sync; rc=$?
 check "exits zero"                      [ "$rc" -eq 0 ]
 check "Vaultwarden never stopped"       not_stopped
 check "no notification"                 not_notified
+teardown
+
+echo "sync: a stalled source (newest backup 3 days old, already restored) says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-28 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+make_backup "$T/drive/bw_backup_2026-09-28-100000.tar.gz" "2026-09-28 10:22:34" stuck
+echo bw_backup_2026-09-28-100000.tar.gz > "$T/downloads/.last_restored"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "a notification was published"    notified
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  with the publisher token"      grep -q 'Authorization: Bearer tk_test' "$T/notify.log"
+check "  naming the backup and its age" grep -q 'BODY .*bw_backup_2026-09-28-100000.* 73 hours old' "$T/notify.log"
+teardown
+
+echo "sync: a stalled source whose newest backup is not yet restored: applied, and says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-26 10:22:34" live
+echo bw_backup_2026-09-27-100000.tar.gz > "$T/downloads/.last_restored"
+make_backup "$T/drive/bw_backup_2026-09-28-100000.tar.gz" "2026-09-28 10:22:34" late
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault is the backup's"      [ "$(label_of "$T/live/db.sqlite3")" = late ]
+check "recorded as restored"            grep -q 2026-09-28-100000 "$T/downloads/.last_restored"
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+check "  and nothing else"              [ "$(grep -c '^ARGS' "$T/notify.log")" -eq 1 ]
+teardown
+
+echo "sync: a newest backup just inside the limit (35 hours) is quiet"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
+echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
+FAKE_NOW="$(at '2026-10-01 21:00:00')"
+run sync; rc=$?
+check "exits zero"                      [ "$rc" -eq 0 ]
+check "no notification"                 not_notified
+teardown
+
+echo "sync: a newest backup just past the limit (37 hours) says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
+echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
+FAKE_NOW="$(at '2026-10-01 23:00:00')"
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+teardown
+
+echo "sync: MAX_BACKUP_AGE_HOURS moves the limit"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
+echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
+MAX_BACKUP_AGE_HOURS=24 run sync; rc=$?
+check "exits non-zero at 25 hours"      [ "$rc" -ne 0 ]
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+teardown
+
+echo "sync: a name with no date in it is not called stalled"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
+make_backup "$T/drive/bw_backup_latest.tar.gz" "2026-09-30 10:22:34" new
+echo bw_backup_latest.tar.gz > "$T/downloads/.last_restored"
+run sync; rc=$?
+check "exits zero"                      [ "$rc" -eq 0 ]
+check "no notification"                 not_notified
+check "  but says the age went unchecked" grep -q 'age was not checked' "$T/out.log"
 teardown
 
 echo
