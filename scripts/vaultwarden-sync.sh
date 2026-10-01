@@ -70,8 +70,8 @@ WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-containrrr/watchtower}"
 VAULTWARDEN_IMAGE="${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}"
 
 # Notifications (ntfy). A refused, missing, unreachable, stalled or broken
-# backup is published here. Leave NTFY_URL empty to disable; each is still logged and still exits
-# non-zero.
+# backup is published here. Leave NTFY_URL empty to disable; each is still
+# logged and still exits non-zero.
 NTFY_URL="${NTFY_URL:-}"                          # e.g. https://ntfy.example.net
 NTFY_TOPIC="${NTFY_TOPIC:-infra}"
 NTFY_TOKEN="${NTFY_TOKEN:-}"                      # publisher token (SECRET)
@@ -277,9 +277,12 @@ backup_epoch() {
 # otherwise find "nothing new" and stay quiet. Applying it, if it is new, is
 # still up to the caller.
 check_stalled() {
-  local name="$1" stamp now limit="$MAX_BACKUP_AGE_HOURS"
-  if [[ ! "$limit" =~ ^[0-9]+$ ]] || [ "$limit" -eq 0 ]; then
-    warn "MAX_BACKUP_AGE_HOURS='$limit' is not a whole number of hours; using 36."
+  local name="$1" stamp now age limit="$MAX_BACKUP_AGE_HOURS"
+  # 10# so a leading zero ("08") is decimal, not an invalid octal number.
+  if [[ "$limit" =~ ^[0-9]{1,6}$ ]] && [ $((10#$limit)) -gt 0 ]; then
+    limit=$((10#$limit))
+  else
+    warn "MAX_BACKUP_AGE_HOURS='$limit' is not a positive whole number of hours; using 36."
     limit=36
   fi
   stamp="$(backup_epoch "$name")"
@@ -289,9 +292,10 @@ check_stalled() {
   fi
   now="$(date +%s)"
   [ $((now - stamp)) -gt $((limit * 3600)) ] || return 0
+  age=$(((now - stamp) / 3600))
   notify medium "Vaultwarden Backup Stalled" \
-    "The newest backup at $REMOTE is $name, $(((now - stamp) / 3600)) hours old (the limit is $limit). The backup source has stopped uploading, so the live vault is no newer than that backup and goes stale until it resumes; this repeats every run. Check the backup job on the source."
-  err "The newest backup, $name, is $(((now - stamp) / 3600)) hours old (limit $limit): the backup source has stalled."
+    "The newest backup at $REMOTE is $name, $age hours old (the limit is $limit). The backup source has stopped uploading, so the live vault is no newer than that backup and goes stale until it resumes; this repeats every run. Check the backup job on the source."
+  err "The newest backup, $name, is $age hours old (limit $limit): the backup source has stalled."
   return 1
 }
 
@@ -324,17 +328,17 @@ first_lines() {
     | head -c 300 | sed 's/ $//' || true
 }
 
-# broken <staging dir> <backup file> <what is wrong> - a downloaded backup that
-# cannot be applied. Notify, then stop without touching anything. Nothing is
-# recorded as restored, so a sync repeats this every run until a good backup
-# arrives.
-broken() {
-  local name
-  name="$(basename "$2")"
-  rm -rf "$1" "$1.err"
+# abort_broken <backup file> <what is wrong> [scratch path...] - a downloaded
+# backup that cannot be applied. Remove the scratch paths, notify, then stop
+# without touching anything. Nothing is recorded as restored, so a sync repeats
+# this every run until a good backup arrives.
+abort_broken() {
+  local name msg
+  name="$(basename "$1")"; msg="$2"; shift 2
+  rm -rf "$@"
   notify medium "Vaultwarden Backup Broken" \
-    "$name $3. Nothing was applied: the live vault was left as it was, and goes stale until a good backup arrives; this repeats every run until then."
-  die "$name $3. Live vault left untouched."
+    "$name $msg. Nothing was applied: the live vault was left as it was, and goes stale until a good backup arrives; this repeats every run until then."
+  die "$name $msg. Live vault left untouched."
 }
 
 # Echoes the staging dir on success.
@@ -346,35 +350,37 @@ stage_and_validate() {
   staging="$(mktemp -d "${TMPDIR:-/tmp}/vwstage.XXXXXX")"
 
   log "Extracting backup to staging: $staging"
+  # openssl and tar share one error file, so both append to it.
   local errf="$staging.err"
+  : > "$errf"
   case "$file" in
     *.aes256)
       [ -n "$BACKUP_ENCRYPTION_KEY" ] \
-        || broken "$staging" "$file" "is encrypted (.aes256), but BACKUP_ENCRYPTION_KEY is empty"
-      if ! openssl enc -d -aes256 -salt -pbkdf2 -pass pass:"$BACKUP_ENCRYPTION_KEY" -in "$file" 2>"$errf" \
+        || abort_broken "$file" "is encrypted (.aes256), but BACKUP_ENCRYPTION_KEY is empty" "$staging" "$errf"
+      if ! openssl enc -d -aes256 -salt -pbkdf2 -pass pass:"$BACKUP_ENCRYPTION_KEY" -in "$file" 2>>"$errf" \
             | tar xzf - -C "$staging" 2>>"$errf"; then
-        broken "$staging" "$file" "could not be decrypted and unpacked ($(first_lines "$errf")): a wrong BACKUP_ENCRYPTION_KEY, or a damaged file"
+        abort_broken "$file" "could not be decrypted and unpacked ($(first_lines "$errf")): a wrong BACKUP_ENCRYPTION_KEY, or a damaged file" "$staging" "$errf"
       fi
       ;;
     *.tar.gz|*.tgz)
-      if ! tar xzf "$file" -C "$staging" 2>"$errf"; then
-        broken "$staging" "$file" "could not be unpacked ($(first_lines "$errf")): a damaged file"
+      if ! tar xzf "$file" -C "$staging" 2>>"$errf"; then
+        abort_broken "$file" "could not be unpacked ($(first_lines "$errf")): a damaged file" "$staging" "$errf"
       fi
       ;;
     *)
-      broken "$staging" "$file" "is not a .tar.gz, .tgz or .aes256 backup"
+      abort_broken "$file" "is not a .tar.gz, .tgz or .aes256 backup" "$staging" "$errf"
       ;;
   esac
   rm -f "$errf"
 
   # db.sqlite3 is at the archive root in both layouts apply_backup accepts.
-  [ -f "$staging/db.sqlite3" ] || broken "$staging" "$file" "holds no db.sqlite3"
+  [ -f "$staging/db.sqlite3" ] || abort_broken "$file" "holds no db.sqlite3" "$staging"
 
   log "Verifying SQLite integrity of restored database..."
   local res
   res="$(sqlite3 "$staging/db.sqlite3" 'PRAGMA integrity_check;' 2>&1 | grep -v '^\*\*\* in database' | head -n1 | head -c 200 || true)"
   if [ "$res" != "ok" ]; then
-    broken "$staging" "$file" "failed the SQLite integrity check ('$res'): a damaged database"
+    abort_broken "$file" "failed the SQLite integrity check ('$res'): a damaged database" "$staging"
   fi
   log "Database integrity OK."
 

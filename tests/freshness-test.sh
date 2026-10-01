@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 #
-# freshness-test.sh - the freshness check, and Drive failing, tested from outside.
+# freshness-test.sh - the freshness check, Drive failing, a stalled source and
+# a broken backup, tested from outside.
 #
 # Feeds vaultwarden-sync.sh backups older, equal and newer than the vault it
-# would replace, and a Drive that cannot be reached, holds no backup or fails a
-# download, and observes what a person would: is the live vault changed, was
-# the Vaultwarden container stopped, did a notification go out.
+# would replace; a Drive that cannot be reached, holds no backup or fails a
+# download; a newest backup days old; and backups that will not decrypt, hold
+# no database or fail the integrity check. It observes what a person would: is
+# the live vault changed, was the Vaultwarden container stopped, did a
+# notification go out.
 #
 # Only the edges of the machine are stubbed: docker (the container), rclone
-# (Google Drive) and curl (the notification hub). Everything else is real:
-# tar, sqlite3, rsync and the script itself.
+# (Google Drive), curl (the notification hub) and the clock ("date +%s", so a
+# backup's age does not depend on the day the tests run). Everything else is
+# real: openssl, tar, sqlite3, rsync and the script itself.
 #
 # Run it inside the image, which carries every tool the script needs:
 #
@@ -136,11 +140,11 @@ EOF
   # hostnas runs in Brisbane, the zone bw2 stamps its backup names in. Now is
   # the daily run on 2026-10-01 unless a test moves it.
   export TZ=Australia/Brisbane
-  FAKE_NOW="$(at '2026-10-01 11:30:00')"; export FAKE_NOW
+  FAKE_NOW="$(brisbane_epoch '2026-10-01 11:30:00')"; export FAKE_NOW
 }
 
-# at <local time> - that time in Brisbane as epoch seconds.
-at() { TZ=Australia/Brisbane "$REAL_DATE" -d "$1" +%s; }
+# brisbane_epoch <local time> - that time in Brisbane as epoch seconds.
+brisbane_epoch() { TZ=Australia/Brisbane "$REAL_DATE" -d "$1" +%s; }
 teardown() { rm -rf "$T"; }
 
 run() { "$SCRIPT" "$@" > "$T/out.log" 2>&1; }
@@ -356,7 +360,7 @@ setup
 make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
 make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
 echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
-FAKE_NOW="$(at '2026-10-01 21:00:00')"
+FAKE_NOW="$(brisbane_epoch '2026-10-01 21:00:00')"
 run sync; rc=$?
 check "exits zero"                      [ "$rc" -eq 0 ]
 check "no notification"                 not_notified
@@ -367,7 +371,7 @@ setup
 make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
 make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
 echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
-FAKE_NOW="$(at '2026-10-01 23:00:00')"
+FAKE_NOW="$(brisbane_epoch '2026-10-01 23:00:00')"
 run sync; rc=$?
 check "exits non-zero"                  [ "$rc" -ne 0 ]
 check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
@@ -456,6 +460,31 @@ check "  titled <host>: ... Broken"     grep -q 'Title: testhost: Vaultwarden Ba
 check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
 check "  naming the integrity check"    grep -q 'BODY bw_backup_2026-09-30-100000.tar.gz failed the SQLite integrity check' "$T/notify.log"
 check "not recorded as restored"        [ ! -f "$T/downloads/.last_restored" ]
+teardown
+
+echo "sync: a stalled source whose newest backup is older than the live vault: both say so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+echo bw_backup_2026-09-27-100000.tar.gz > "$T/downloads/.last_restored"
+make_backup "$T/drive/bw_backup_2026-09-28-100000.tar.gz" "2026-09-28 10:22:34" late
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+check "  and <host>: ... Refused"       grep -q 'Title: testhost: Vaultwarden Backup Refused' "$T/notify.log"
+teardown
+
+echo "sync: MAX_BACKUP_AGE_HOURS with a leading zero is read as decimal"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-30 10:22:34" live
+make_backup "$T/drive/bw_backup_2026-09-30-100000.tar.gz" "2026-09-30 10:22:34" new
+echo bw_backup_2026-09-30-100000.tar.gz > "$T/downloads/.last_restored"
+MAX_BACKUP_AGE_HOURS=08 run sync; rc=$?
+check "exits non-zero at 25 hours"      [ "$rc" -ne 0 ]
+check "  titled <host>: ... Stalled"    grep -q 'Title: testhost: Vaultwarden Backup Stalled' "$T/notify.log"
+check "  naming the limit of 8"         grep -q 'the limit is 8)' "$T/notify.log"
 teardown
 
 echo
