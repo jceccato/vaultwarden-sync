@@ -28,6 +28,8 @@ services:
       NTFY_TOPIC: ${NTFY_TOPIC:-infra}
       NTFY_TOKEN: ${NTFY_TOKEN:-}              # ntfy publisher token (SECRET)
       NOTIFY_HOST: ${NOTIFY_HOST:-vaultwarden-sync}  # named first in the title
+      MAX_BACKUP_AGE_HOURS: ${MAX_BACKUP_AGE_HOURS:-36}  # older newest backup = stalled source
+      BACKUP_TZ: ${BACKUP_TZ:-}                # zone of the backup names; empty = TZ
     volumes:
       # control the vaultwarden container + run watchtower
       - /var/run/docker.sock:/var/run/docker.sock

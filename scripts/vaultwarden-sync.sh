@@ -10,9 +10,12 @@
 #      If it is the same one we restored last time -> exit, nothing to do.
 #      If Drive cannot be listed or read, or holds no backup, send a
 #      notification and exit non-zero: the live vault would otherwise go stale
-#      without a word.
+#      without a word. So, too, if the newest backup is older than
+#      MAX_BACKUP_AGE_HOURS (the source has stalled), restored or not.
 #   2. Download it, decrypt (openssl aes256) and extract to a staging dir,
-#      then validate the SQLite DB BEFORE touching anything live.
+#      then validate the SQLite DB BEFORE touching anything live. A backup that
+#      will not decrypt, holds no db.sqlite3 or fails the integrity check is
+#      notified and never applied.
 #      Refuse it, and send a notification, unless its vault is newer than the
 #      live one (see check_fresh). Without --force a stale backup never lands.
 #   3. Stop the local Vaultwarden container.
@@ -66,8 +69,8 @@ UPDATE_METHOD="${UPDATE_METHOD:-watchtower}"
 WATCHTOWER_IMAGE="${WATCHTOWER_IMAGE:-containrrr/watchtower}"
 VAULTWARDEN_IMAGE="${VAULTWARDEN_IMAGE:-vaultwarden/server:latest}"
 
-# Notifications (ntfy). A refused, missing or unreachable backup is published
-# here. Leave NTFY_URL empty to disable; each is still logged and still exits
+# Notifications (ntfy). A refused, missing, unreachable, stalled or broken
+# backup is published here. Leave NTFY_URL empty to disable; each is still logged and still exits
 # non-zero.
 NTFY_URL="${NTFY_URL:-}"                          # e.g. https://ntfy.example.net
 NTFY_TOPIC="${NTFY_TOPIC:-infra}"
@@ -314,6 +317,26 @@ download_backup() {
 # ---------------------------------------------------------------------------
 # Stage + validate a backup file (does NOT touch live data)
 # ---------------------------------------------------------------------------
+# first_lines <file> - the first two non-empty lines of an error file, on one
+# line, for a message.
+first_lines() {
+  tr -d '\r' < "$1" 2>/dev/null | grep -v '^[[:space:]]*$' | head -n 2 | tr '\n' ' ' \
+    | head -c 300 | sed 's/ $//' || true
+}
+
+# broken <staging dir> <backup file> <what is wrong> - a downloaded backup that
+# cannot be applied. Notify, then stop without touching anything. Nothing is
+# recorded as restored, so a sync repeats this every run until a good backup
+# arrives.
+broken() {
+  local name
+  name="$(basename "$2")"
+  rm -rf "$1" "$1.err"
+  notify medium "Vaultwarden Backup Broken" \
+    "$name $3. Nothing was applied: the live vault was left as it was, and goes stale until a good backup arrives; this repeats every run until then."
+  die "$name $3. Live vault left untouched."
+}
+
 # Echoes the staging dir on success.
 stage_and_validate() {
   local file="$1"
@@ -323,36 +346,35 @@ stage_and_validate() {
   staging="$(mktemp -d "${TMPDIR:-/tmp}/vwstage.XXXXXX")"
 
   log "Extracting backup to staging: $staging"
+  local errf="$staging.err"
   case "$file" in
     *.aes256)
-      [ -n "$BACKUP_ENCRYPTION_KEY" ] || { rm -rf "$staging"; die "Backup is encrypted (.aes256) but BACKUP_ENCRYPTION_KEY is empty."; }
-      if ! openssl enc -d -aes256 -salt -pbkdf2 -pass pass:"$BACKUP_ENCRYPTION_KEY" -in "$file" \
-            | tar xzf - -C "$staging"; then
-        rm -rf "$staging"
-        die "Failed to decrypt/extract '$file' (wrong key or corrupt file?)."
+      [ -n "$BACKUP_ENCRYPTION_KEY" ] \
+        || broken "$staging" "$file" "is encrypted (.aes256), but BACKUP_ENCRYPTION_KEY is empty"
+      if ! openssl enc -d -aes256 -salt -pbkdf2 -pass pass:"$BACKUP_ENCRYPTION_KEY" -in "$file" 2>"$errf" \
+            | tar xzf - -C "$staging" 2>>"$errf"; then
+        broken "$staging" "$file" "could not be decrypted and unpacked ($(first_lines "$errf")): a wrong BACKUP_ENCRYPTION_KEY, or a damaged file"
       fi
       ;;
     *.tar.gz|*.tgz)
-      if ! tar xzf "$file" -C "$staging"; then
-        rm -rf "$staging"
-        die "Failed to extract '$file'."
+      if ! tar xzf "$file" -C "$staging" 2>"$errf"; then
+        broken "$staging" "$file" "could not be unpacked ($(first_lines "$errf")): a damaged file"
       fi
       ;;
     *)
-      rm -rf "$staging"
-      die "Unrecognised backup extension: $file"
+      broken "$staging" "$file" "is not a .tar.gz, .tgz or .aes256 backup"
       ;;
   esac
+  rm -f "$errf"
 
   # db.sqlite3 is at the archive root in both layouts apply_backup accepts.
-  [ -f "$staging/db.sqlite3" ] || { rm -rf "$staging"; die "Backup does not contain db.sqlite3 -- refusing to restore."; }
+  [ -f "$staging/db.sqlite3" ] || broken "$staging" "$file" "holds no db.sqlite3"
 
   log "Verifying SQLite integrity of restored database..."
   local res
-  res="$(sqlite3 "$staging/db.sqlite3" 'PRAGMA integrity_check;' 2>&1 | head -n1 || true)"
+  res="$(sqlite3 "$staging/db.sqlite3" 'PRAGMA integrity_check;' 2>&1 | grep -v '^\*\*\* in database' | head -n1 | head -c 200 || true)"
   if [ "$res" != "ok" ]; then
-    rm -rf "$staging"
-    die "SQLite integrity_check failed ('$res') -- refusing to restore a corrupt DB."
+    broken "$staging" "$file" "failed the SQLite integrity check ('$res'): a damaged database"
   fi
   log "Database integrity OK."
 

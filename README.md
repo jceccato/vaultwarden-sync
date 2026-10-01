@@ -336,7 +336,9 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 | `SCHEDULE` | `0 3 * * *` | Cron for Mode A (run after the GCloud backup) |
 | `RUN_ON_START` | `false` | Mode A: also sync on container start |
 | `TZ` | `UTC` | Timezone for the schedule/logs |
-| `NTFY_URL` | *(empty)* | ntfy server to notify when a backup is refused, missing or unreachable; empty = log only |
+| `MAX_BACKUP_AGE_HOURS` | `36` | A newest backup older than this means the source has stalled, and is notified |
+| `BACKUP_TZ` | *(the container's `TZ`)* | Zone the backup names are stamped in (bw2's `backup.sh` uses `Australia/Brisbane`) |
+| `NTFY_URL` | *(empty)* | ntfy server to notify when a backup is refused, missing, unreachable, stalled or broken; empty = log only |
 | `NTFY_TOPIC` | `infra` | ntfy topic |
 | `NTFY_TOKEN` | *(empty)* | ntfy publisher token (secret) |
 | `NOTIFY_HOST` | `vaultwarden-sync` | Named first in the notification title |
@@ -376,6 +378,19 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
   Missing*. Either way nothing is stopped or changed and the run exits
   non-zero, every run, until it is fixed. Without this the standby would go
   stale in silence.
+- **So is a stalled backup.** If the source stops uploading, the newest backup
+  on Drive stays the one already restored and there is "nothing new" every
+  day. So each run reads the newest backup's age from its name
+  (`..._YYYY-MM-DD-HHMMSS`, in `BACKUP_TZ`), and past `MAX_BACKUP_AGE_HOURS`
+  publishes *Vaultwarden Backup Stalled* and exits non-zero, whether or not it
+  was already restored. A stale backup that is still new to the standby is
+  applied first (through the freshness check), and the run still exits
+  non-zero. A name with no date in it is logged as unchecked, not notified.
+- **And a broken one.** A backup that will not decrypt (a wrong
+  `BACKUP_ENCRYPTION_KEY`, or a damaged file), holds no `db.sqlite3`, or fails
+  `PRAGMA integrity_check` publishes *Vaultwarden Backup Broken*, naming which.
+  Nothing is stopped or changed, it is not recorded as restored, and the run
+  exits non-zero, every run, until a good backup arrives.
 - The DB's `-wal`/`-shm` sidecars are removed during restore so a stale WAL can't
   corrupt the freshly restored database.
 - `ROLLBACK_DIR` and `DOWNLOAD_DIR` **must be outside** `APPDATA_DIR`.
@@ -389,10 +404,12 @@ Set via `.env` (Mode A) or the top of the User Script (Mode B).
 | Symptom | Likely cause |
 |---------|--------------|
 | `Backup is encrypted (.aes256) but BACKUP_ENCRYPTION_KEY is empty` | Set the key in `.env` / script |
-| `Failed to decrypt/extract` | Wrong `BACKUP_ENCRYPTION_KEY` |
+| `... could not be decrypted and unpacked (bad decrypt ...)` | Wrong `BACKUP_ENCRYPTION_KEY`, or a damaged file |
 | `Could not list backups at gdrive:...` / `Could not download ...` | Wrong `RCLONE_REMOTE`, an expired or revoked Drive token, or no network - test with `rclone lsf` |
 | `No backup to restore: ...` | Wrong `RCLONE_PATH`, or the backup source has stopped uploading |
-| `SQLite integrity_check failed` | The downloaded backup is corrupt; it refuses to apply it |
+| `... holds no db.sqlite3` | The archive is not a Vaultwarden backup, or the source's backup job is broken |
+| `... failed the SQLite integrity check` | The downloaded backup is corrupt; it refuses to apply it |
+| `The newest backup, bw_backup_..., is N hours old` | The backup source has stopped uploading; check its backup job. Wrong `BACKUP_TZ` shifts the age by hours, not days |
 | `Refusing bw_backup_...: its newest revision ... is not newer than the live vault's ...` | The backup source is not producing fresh backups, or no client used the vault since the last one. Check the source; `restore <file> --force` applies it anyway |
 | Standby won't decrypt the vault after restore | `rsa_key*` missing from backup, or you logged in against the wrong server |
 | Update step warns but continues | watchtower couldn't reach a registry; container still starts on current image |

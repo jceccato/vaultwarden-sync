@@ -23,7 +23,7 @@ RCLONE_PATH="bw_backups"
 BACKUP_ENCRYPTION_KEY="CHANGE_ME"        # openssl passphrase (keep an offline copy!)
 UPDATE_METHOD="watchtower"               # watchtower | pull | none
 TZ="Australia/Brisbane"
-NTFY_URL=""                              # ntfy server for a refused, missing or unreachable backup; blank = log only
+NTFY_URL=""                              # ntfy server for a refused, missing, unreachable, stalled or broken backup; blank = log only
 NTFY_TOKEN=""                            # ntfy publisher token
 NOTIFY_HOST="$(hostname -s)"             # named first in the notification title
 # --------------------------------------------------------------------------

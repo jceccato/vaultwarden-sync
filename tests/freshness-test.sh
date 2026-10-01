@@ -394,6 +394,70 @@ check "no notification"                 not_notified
 check "  but says the age went unchecked" grep -q 'age was not checked' "$T/out.log"
 teardown
 
+echo "sync: a backup that will not decrypt (a wrong key) says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+make_backup "$T/new.tar.gz" "2026-09-29 23:07:19" new
+openssl enc -e -aes256 -salt -pbkdf2 -pass pass:the-right-key -in "$T/new.tar.gz" \
+  -out "$T/drive/bw_backup_2026-09-30-100000.tar.gz.aes256"
+echo bw_backup_2026-09-29-100000.tar.gz.aes256 > "$T/downloads/.last_restored"
+BACKUP_ENCRYPTION_KEY=a-wrong-key run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "a notification was published"    notified
+check "  titled <host>: ... Broken"     grep -q 'Title: testhost: Vaultwarden Backup Broken' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  with the publisher token"      grep -q 'Authorization: Bearer tk_test' "$T/notify.log"
+check "  naming the backup and the key" grep -q 'BODY bw_backup_2026-09-30-100000.tar.gz.aes256 could not be decrypted.*BACKUP_ENCRYPTION_KEY' "$T/notify.log"
+check "not recorded as restored"        grep -q 2026-09-29 "$T/downloads/.last_restored"
+check "no staging left behind"          [ -z "$(find "$T" -maxdepth 1 -name 'vwstage.*')" ]
+teardown
+
+echo "sync: a backup with no db.sqlite3 in it says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+mkdir "$T/nodb"; echo key-nodb > "$T/nodb/rsa_key.pem"
+tar czf "$T/drive/bw_backup_2026-09-30-100000.tar.gz" -C "$T/nodb" .
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "RSA key not applied"             [ ! -f "$T/live/rsa_key.pem" ]
+check "Vaultwarden never stopped"       not_stopped
+check "  titled <host>: ... Broken"     grep -q 'Title: testhost: Vaultwarden Backup Broken' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  saying there is no database"   grep -q 'BODY bw_backup_2026-09-30-100000.tar.gz holds no db.sqlite3' "$T/notify.log"
+check "not recorded as restored"        [ ! -f "$T/downloads/.last_restored" ]
+teardown
+
+echo "sync: a backup whose database fails the integrity check says so"
+setup
+make_vault "$T/live/db.sqlite3" "2026-09-29 10:22:34" live
+before="$(sha256sum < "$T/live/db.sqlite3")"
+mkdir "$T/bad"
+make_vault "$T/bad/db.sqlite3" "2026-09-29 23:07:19" bad
+# Enough ciphers for many 1 KiB pages, then garbage over the cell pointers of
+# the last page, which the inserts wrote: a page of the ciphers table.
+sqlite3 "$T/bad/db.sqlite3" "PRAGMA page_size=1024; VACUUM;
+  WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 400)
+  INSERT INTO ciphers SELECT 'c'||i, hex(randomblob(40)), '2026-09-01 00:00:00', NULL FROM n;"
+pages="$(sqlite3 "$T/bad/db.sqlite3" 'PRAGMA page_count;')"
+printf 'garbage%.0s' $(seq 1 70) \
+  | dd of="$T/bad/db.sqlite3" bs=1 seek=$(( (pages - 1) * 1024 + 8 )) conv=notrunc 2>/dev/null
+check "  (the fixture really is corrupt)" not [ "$(sqlite3 "$T/bad/db.sqlite3" 'PRAGMA integrity_check;' 2>&1 | head -n1)" = ok ]
+tar czf "$T/drive/bw_backup_2026-09-30-100000.tar.gz" -C "$T/bad" .
+run sync; rc=$?
+check "exits non-zero"                  [ "$rc" -ne 0 ]
+check "live vault unchanged"            [ "$(sha256sum < "$T/live/db.sqlite3")" = "$before" ]
+check "Vaultwarden never stopped"       not_stopped
+check "  titled <host>: ... Broken"     grep -q 'Title: testhost: Vaultwarden Backup Broken' "$T/notify.log"
+check "  at medium severity (3)"        grep -q 'Priority: 3' "$T/notify.log"
+check "  naming the integrity check"    grep -q 'BODY bw_backup_2026-09-30-100000.tar.gz failed the SQLite integrity check' "$T/notify.log"
+check "not recorded as restored"        [ ! -f "$T/downloads/.last_restored" ]
+teardown
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]
